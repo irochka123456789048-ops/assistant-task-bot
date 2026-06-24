@@ -25,10 +25,11 @@ from telegram.ext import (
 from config import Settings, load_settings
 from database import (
     MANAGER_PENDING_STATUSES,
+    STATUS_CANCELLED,
     STATUS_DONE,
     STATUS_IN_PROGRESS,
     STATUS_NEEDS_INPUT,
-    STATUS_READY_REVIEW,
+    STATUS_POSTPONED,
     STATUS_STUCK,
     STATUS_WAITING_MANAGER,
     Task,
@@ -44,9 +45,10 @@ logging.basicConfig(
 STATUS_BY_KEY = {
     "work": STATUS_IN_PROGRESS,
     "wait": STATUS_WAITING_MANAGER,
-    "review": STATUS_READY_REVIEW,
     "input": STATUS_NEEDS_INPUT,
     "stuck": STATUS_STUCK,
+    "postponed": STATUS_POSTPONED,
+    "cancelled": STATUS_CANCELLED,
     "done": STATUS_DONE,
 }
 
@@ -90,9 +92,11 @@ def cancel_menu() -> ReplyKeyboardMarkup:
 def task_text(task: Task, include_solution: bool = True) -> str:
     lines = [
         f"#{task.id} {task.title}",
-        f"Дедлайн: {task.deadline}",
         f"Статус: {task.status}",
     ]
+
+    if task.deadline:
+        lines.insert(1, f"Дедлайн: {task.deadline}")
 
     if task.comment:
         lines.append(f"Задача от руководителя: {task.comment}")
@@ -113,14 +117,17 @@ def assistant_status_keyboard(task_id: int) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton("В работе", callback_data=f"assistant_status:work:{task_id}"),
-                InlineKeyboardButton("Ждёт руководителя", callback_data=f"assistant_status:wait:{task_id}"),
+                InlineKeyboardButton("Жду решения", callback_data=f"assistant_status:wait:{task_id}"),
             ],
             [
-                InlineKeyboardButton("Готово на проверку", callback_data=f"assistant_status:review:{task_id}"),
-                InlineKeyboardButton("Нужны вводные", callback_data=f"assistant_status:input:{task_id}"),
-            ],
-            [
+                InlineKeyboardButton("Жду комментарии", callback_data=f"assistant_status:input:{task_id}"),
                 InlineKeyboardButton("Зависло", callback_data=f"assistant_status:stuck:{task_id}"),
+            ],
+            [
+                InlineKeyboardButton("Перенос", callback_data=f"assistant_status:postponed:{task_id}"),
+                InlineKeyboardButton("Отмена", callback_data=f"assistant_status:cancelled:{task_id}"),
+            ],
+            [
                 InlineKeyboardButton("Выполнено", callback_data=f"assistant_status:done:{task_id}"),
             ],
         ]
@@ -198,9 +205,14 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=main_menu(update.effective_user.id, settings),
         )
         return
+
+    keyboard = [
+        [InlineKeyboardButton(f"{status}: {count}", callback_data=f"summary_status:{status}")]
+        for status, count in rows
+    ]
     await update.message.reply_text(
-        "Сводка:\n" + "\n".join(f"{status}: {count}" for status, count in rows),
-        reply_markup=main_menu(update.effective_user.id, settings),
+        "Выберите статус, чтобы посмотреть задачи:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -236,19 +248,21 @@ async def create_task_from_text(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("В настройках не указан ASSISTANT_IDS.")
         return
 
-    parts = [part.strip() for part in text.split("|")]
-    if len(parts) < 2 or not parts[0] or not parts[1]:
+    title, deadline, comment = parse_task_input(text)
+    if not title:
         await update.message.reply_text(
-            "Напишите так:\nНазвание задачи | дедлайн | комментарий\n\n"
-            "Пример:\nПодготовить договор | завтра 18:00 | проверить сумму",
+            "Напишите задачу обычным текстом.\n\n"
+            "Например:\nПодготовить договор\n\n"
+            "Если хотите, можно добавить дедлайн и комментарий:\n"
+            "Подготовить договор | завтра 18:00 | проверить сумму",
             reply_markup=cancel_menu(),
         )
         return
 
     task = db.create_task(
-        title=parts[0],
-        deadline=parts[1],
-        comment=parts[2] if len(parts) >= 3 else "",
+        title=title,
+        deadline=deadline,
+        comment=comment,
         assistant_id=assistant_id,
         manager_id=user_id,
         created_by_id=user_id,
@@ -267,6 +281,21 @@ async def create_task_from_text(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+def parse_task_input(text: str) -> tuple[str, str, str]:
+    text = text.strip()
+    if not text:
+        return "", "", ""
+
+    if "|" not in text:
+        return text, "", ""
+
+    parts = [part.strip() for part in text.split("|")]
+    title = parts[0] if parts else ""
+    deadline = parts[1] if len(parts) > 1 else ""
+    comment = parts[2] if len(parts) > 2 else ""
+    return title, deadline, comment
+
+
 async def submit_task_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
@@ -276,12 +305,11 @@ async def submit_task_from_message(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("Сдавать результат может только ассистент.")
         return
 
-    parsed = parse_submit_message(update.message)
+    selected_task_id = context.user_data.get("submit_task_id")
+    parsed = parse_submit_message(update.message, selected_task_id=selected_task_id)
     if parsed is None:
         await update.message.reply_text(
-            "Напишите так:\nНомер задачи | что сделано\n\n"
-            "Можно отправить файл или фото с подписью:\n"
-            "Номер задачи | комментарий к результату",
+            "Сначала выберите задачу из списка, затем отправьте результат текстом, фото или файлом.",
             reply_markup=cancel_menu(),
         )
         return
@@ -306,22 +334,26 @@ async def submit_task_from_message(update: Update, context: ContextTypes.DEFAULT
         return
 
     await send_result_to_manager(context, manager_id, task)
+    context.user_data.pop("submit_task_id", None)
     await update.message.reply_text(
         f"Результат отправлен руководителю:\n\n{task_text(task)}",
         reply_markup=main_menu(user_id, settings),
     )
 
 
-def parse_submit_message(message: Message) -> tuple[int, str, str, str, str] | None:
+def parse_submit_message(message: Message, selected_task_id: int | None = None) -> tuple[int, str, str, str, str] | None:
     text = message.caption or message.text or ""
     text = text.removeprefix("/submit").strip()
     parts = [part.strip() for part in text.split("|", 1)]
 
-    if not parts or not parts[0].isdigit():
-        return None
-
-    task_id = int(parts[0])
-    solution_text = parts[1] if len(parts) > 1 else ""
+    if selected_task_id is not None:
+        task_id = int(selected_task_id)
+        solution_text = text
+    else:
+        if not parts or not parts[0].isdigit():
+            return None
+        task_id = int(parts[0])
+        solution_text = parts[1] if len(parts) > 1 else ""
     file_id = ""
     file_name = ""
     file_type = ""
@@ -377,6 +409,22 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     parts = query.data.split(":")
     action_group = parts[0]
 
+    if action_group == "pick_submit":
+        await handle_pick_submit_button(update, context, settings, parts)
+        return
+
+    if action_group == "summary_status":
+        await handle_summary_status_button(update, context, parts)
+        return
+
+    if action_group == "task_card":
+        await handle_task_card_button(update, context, parts)
+        return
+
+    if action_group == "change_status":
+        await handle_change_status_button(update, context, settings, parts)
+        return
+
     if action_group == "assistant_status":
         await handle_assistant_status_button(update, context, settings, parts)
         return
@@ -384,6 +432,92 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if action_group == "manager_decision":
         await handle_manager_decision_button(update, context, settings, parts)
         return
+
+
+async def handle_pick_submit_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: Settings,
+    parts: list[str],
+) -> None:
+    query = update.callback_query
+    if not is_assistant(query.from_user.id, settings):
+        await query.edit_message_text("Выбирать задачу для сдачи может только ассистент.")
+        return
+
+    task_id = int(parts[1])
+    context.user_data["state"] = "submit_result"
+    context.user_data["submit_task_id"] = task_id
+    await query.edit_message_text(
+        f"Выбрана задача #{task_id}.\n\n"
+        "Теперь отправьте результат текстом, фото или файлом.\n"
+        "Если отправляете файл или фото, добавьте подпись с комментарием."
+    )
+
+
+async def handle_summary_status_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+) -> None:
+    db: TaskDatabase = context.application.bot_data["db"]
+    status = ":".join(parts[1:])
+    tasks = db.list_tasks((status,))
+
+    if not tasks:
+        await update.callback_query.edit_message_text(f"В статусе «{status}» задач нет.")
+        return
+
+    rows = [
+        [InlineKeyboardButton(f"#{task.id} {task.title[:40]}", callback_data=f"task_card:{task.id}")]
+        for task in tasks[:30]
+    ]
+    await update.callback_query.edit_message_text(
+        f"Задачи в статусе «{status}»:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def handle_task_card_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+) -> None:
+    db: TaskDatabase = context.application.bot_data["db"]
+    task_id = int(parts[1])
+
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        await update.callback_query.edit_message_text("Такой задачи нет.")
+        return
+
+    rows = [
+        [InlineKeyboardButton("Сдать результат по этой задаче", callback_data=f"pick_submit:{task.id}")],
+        [InlineKeyboardButton("Изменить статус", callback_data=f"change_status:{task.id}")],
+    ]
+    await update.callback_query.edit_message_text(
+        task_text(task),
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def handle_change_status_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: Settings,
+    parts: list[str],
+) -> None:
+    query = update.callback_query
+    if not is_assistant(query.from_user.id, settings):
+        await query.edit_message_text("Менять статус может только ассистент.")
+        return
+
+    task_id = int(parts[1])
+    await query.edit_message_text(
+        f"Выберите новый статус для задачи #{task_id}:",
+        reply_markup=assistant_status_keyboard(task_id),
+    )
 
 
 async def handle_assistant_status_button(
@@ -435,7 +569,7 @@ async def handle_manager_decision_button(
         return
 
     status_by_decision = {
-        "changes": STATUS_READY_REVIEW,
+        "changes": STATUS_NEEDS_INPUT,
         "question": STATUS_NEEDS_INPUT,
         "later": STATUS_STUCK,
     }
@@ -470,8 +604,8 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if state == "submit_result":
-        context.user_data.clear()
         await submit_task_from_message(update, context)
+        context.user_data.clear()
         return
 
     if text == MENU_NEW_TASK:
@@ -480,8 +614,10 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
         context.user_data["state"] = "create_task"
         await update.message.reply_text(
-            "Напишите задачу в формате:\nНазвание | дедлайн | комментарий\n\n"
-            "Пример:\nПодготовить договор | завтра 18:00 | проверить сумму",
+            "Напишите задачу обычным текстом.\n\n"
+            "Пример:\nПодготовить договор\n\n"
+            "Если нужен дедлайн или комментарий, можно так:\n"
+            "Подготовить договор | завтра 18:00 | проверить сумму",
             reply_markup=cancel_menu(),
         )
         return
@@ -490,13 +626,7 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not is_assistant(user_id, settings):
             await update.message.reply_text("Эта кнопка доступна только ассистенту.")
             return
-        context.user_data["state"] = "submit_result"
-        await update.message.reply_text(
-            "Напишите результат в формате:\nНомер задачи | что сделано\n\n"
-            "Пример:\n1 | Договор готов\n\n"
-            "Можно прикрепить файл или фото и добавить такую же подпись.",
-            reply_markup=cancel_menu(),
-        )
+        await show_submit_task_picker(update, context)
         return
 
     if text == MENU_LIST:
@@ -561,14 +691,31 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def show_submit_task_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db: TaskDatabase = context.application.bot_data["db"]
+    tasks = db.list_tasks()
+    if not tasks:
+        await update.message.reply_text("Активных задач пока нет.")
+        return
+
+    rows = []
+    for task in tasks[:20]:
+        rows.append([InlineKeyboardButton(f"#{task.id} {task.title[:40]}", callback_data=f"pick_submit:{task.id}")])
+
+    await update.message.reply_text(
+        "Выберите задачу, по которой хотите сдать результат:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
 async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     user_id = update.effective_user.id
     if context.user_data.get("state") != "submit_result":
         return
 
-    context.user_data.clear()
     await submit_task_from_message(update, context)
+    context.user_data.clear()
     await update.message.reply_text(reply_markup=main_menu(user_id, settings), text="Меню возвращено.")
 
 

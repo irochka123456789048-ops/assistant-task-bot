@@ -7,21 +7,23 @@ import sqlite3
 
 
 STATUS_IN_PROGRESS = "В работе"
-STATUS_WAITING_MANAGER = "Ждёт руководителя"
-STATUS_READY_REVIEW = "Готово на проверку"
-STATUS_NEEDS_INPUT = "Нужны вводные"
+STATUS_WAITING_MANAGER = "Жду решения"
+STATUS_NEEDS_INPUT = "Жду комментарии"
 STATUS_STUCK = "Зависло"
+STATUS_POSTPONED = "Перенос"
+STATUS_CANCELLED = "Отмена"
 STATUS_DONE = "Выполнено"
 
 ALL_STATUSES = (
     STATUS_IN_PROGRESS,
     STATUS_WAITING_MANAGER,
-    STATUS_READY_REVIEW,
     STATUS_NEEDS_INPUT,
     STATUS_STUCK,
+    STATUS_POSTPONED,
+    STATUS_CANCELLED,
     STATUS_DONE,
 )
-MANAGER_PENDING_STATUSES = (STATUS_WAITING_MANAGER, STATUS_READY_REVIEW)
+MANAGER_PENDING_STATUSES = (STATUS_WAITING_MANAGER, STATUS_NEEDS_INPUT)
 
 
 @dataclass(frozen=True)
@@ -70,7 +72,7 @@ class TaskDatabase:
                 CREATE TABLE IF NOT EXISTS tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
-                    deadline TEXT NOT NULL,
+                    deadline TEXT NOT NULL DEFAULT '',
                     comment TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     assistant_id INTEGER NOT NULL,
@@ -162,8 +164,8 @@ class TaskDatabase:
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    "SELECT * FROM tasks WHERE status != ? ORDER BY id DESC",
-                    (STATUS_DONE,),
+                    "SELECT * FROM tasks WHERE status NOT IN (?, ?) ORDER BY id DESC",
+                    (STATUS_DONE, STATUS_CANCELLED),
                 ).fetchall()
         return [self._task_from_row(row) for row in rows]
 
