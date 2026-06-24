@@ -8,6 +8,7 @@ import sqlite3
 
 STATUS_IN_PROGRESS = "В работе"
 STATUS_WAITING_MANAGER = "Жду решения"
+STATUS_APPROVAL = "На согласовании"
 STATUS_NEEDS_INPUT = "Жду комментарии"
 STATUS_STUCK = "Зависло"
 STATUS_POSTPONED = "Перенос"
@@ -17,13 +18,20 @@ STATUS_DONE = "Выполнено"
 ALL_STATUSES = (
     STATUS_IN_PROGRESS,
     STATUS_WAITING_MANAGER,
+    STATUS_APPROVAL,
     STATUS_NEEDS_INPUT,
     STATUS_STUCK,
     STATUS_POSTPONED,
     STATUS_CANCELLED,
     STATUS_DONE,
 )
-MANAGER_PENDING_STATUSES = (STATUS_WAITING_MANAGER, STATUS_NEEDS_INPUT)
+MANAGER_PENDING_STATUSES = (
+    STATUS_WAITING_MANAGER,
+    STATUS_APPROVAL,
+    STATUS_NEEDS_INPUT,
+    STATUS_STUCK,
+    STATUS_POSTPONED,
+)
 
 
 @dataclass(frozen=True)
@@ -229,7 +237,7 @@ class TaskDatabase:
                 WHERE id = ?
                 """,
                 (
-                    STATUS_WAITING_MANAGER,
+                    STATUS_APPROVAL,
                     manager_id,
                     timestamp,
                     timestamp,

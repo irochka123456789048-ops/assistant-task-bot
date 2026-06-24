@@ -26,6 +26,7 @@ from config import Settings, load_settings
 from database import (
     MANAGER_PENDING_STATUSES,
     STATUS_CANCELLED,
+    STATUS_APPROVAL,
     STATUS_DONE,
     STATUS_IN_PROGRESS,
     STATUS_NEEDS_INPUT,
@@ -45,6 +46,7 @@ logging.basicConfig(
 STATUS_BY_KEY = {
     "work": STATUS_IN_PROGRESS,
     "wait": STATUS_WAITING_MANAGER,
+    "approval": STATUS_APPROVAL,
     "input": STATUS_NEEDS_INPUT,
     "stuck": STATUS_STUCK,
     "postponed": STATUS_POSTPONED,
@@ -120,14 +122,15 @@ def assistant_status_keyboard(task_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Жду решения", callback_data=f"assistant_status:wait:{task_id}"),
             ],
             [
+                InlineKeyboardButton("На согласовании", callback_data=f"assistant_status:approval:{task_id}"),
                 InlineKeyboardButton("Жду комментарии", callback_data=f"assistant_status:input:{task_id}"),
+            ],
+            [
                 InlineKeyboardButton("Зависло", callback_data=f"assistant_status:stuck:{task_id}"),
-            ],
-            [
                 InlineKeyboardButton("Перенос", callback_data=f"assistant_status:postponed:{task_id}"),
-                InlineKeyboardButton("Отмена", callback_data=f"assistant_status:cancelled:{task_id}"),
             ],
             [
+                InlineKeyboardButton("Отмена", callback_data=f"assistant_status:cancelled:{task_id}"),
                 InlineKeyboardButton("Выполнено", callback_data=f"assistant_status:done:{task_id}"),
             ],
         ]
@@ -146,6 +149,12 @@ def manager_decision_keyboard(task_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Позже", callback_data=f"manager_decision:later:{task_id}"),
             ],
         ]
+    )
+
+
+def manager_feedback_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Дать комментарий", callback_data=f"manager_comment:{task_id}")]]
     )
 
 
@@ -433,6 +442,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await handle_manager_decision_button(update, context, settings, parts)
         return
 
+    if action_group == "manager_comment":
+        await handle_manager_comment_button(update, context, settings, parts)
+        return
+
 
 async def handle_pick_submit_button(
     update: Update,
@@ -583,6 +596,33 @@ async def handle_manager_decision_button(
     )
 
 
+async def handle_manager_comment_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: Settings,
+    parts: list[str],
+) -> None:
+    query = update.callback_query
+    db: TaskDatabase = context.application.bot_data["db"]
+
+    if not is_manager(query.from_user.id, settings):
+        await query.edit_message_text("Комментировать задачу может только руководитель.")
+        return
+
+    task_id = int(parts[1])
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        await query.edit_message_text("Такой задачи нет.")
+        return
+
+    pending = context.application.bot_data.setdefault("pending_manager_feedback", {})
+    pending[query.from_user.id] = (task_id, task.status)
+    await query.edit_message_text(
+        f"Напишите комментарий для ассистента по задаче #{task_id}:\n\n{task_text(task)}"
+    )
+
+
 async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     user_id = update.effective_user.id
@@ -663,6 +703,7 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await context.bot.send_message(
                 chat_id=task.manager_id,
                 text=f"Ассистент обновил статус задачи #{task.id}:\n\n{task_text(task)}",
+                reply_markup=manager_feedback_keyboard(task.id),
             )
         return
 
