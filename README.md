@@ -117,7 +117,9 @@ MVP на Python, python-telegram-bot и SQLite.
 
 ```env
 BOT_TOKEN=токен_от_BotFather
-OPENAI_API_KEY=ключ_OpenAI_для_расшифровки_голосовых
+YANDEX_API_KEY=ключ_Yandex_SpeechKit_для_расшифровки_голосовых
+YANDEX_FOLDER_ID=folder_id_из_Yandex_Cloud
+VOICE_TRANSCRIBER=yandex
 ASSISTANT_IDS=telegram_id_ассистента
 MANAGER_IDS=telegram_id_руководителя
 DATABASE_PATH=assistant_tasks.db
@@ -150,7 +152,13 @@ py cli_test.py
 1. Добавить бота в группу.
 2. Сделать бота администратором.
 3. В `@BotFather` выключить `Group Privacy`.
-4. На Bothost добавить переменную `OPENAI_API_KEY`.
+4. На Bothost добавить переменные `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`, `VOICE_TRANSCRIBER=yandex`.
+
+Проверка настроек голосовых:
+
+```text
+/check_voice
+```
 
 ## Тест
 

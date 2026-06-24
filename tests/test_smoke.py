@@ -6,9 +6,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from database import (
+    STATUS_APPROVAL,
     STATUS_DONE,
     STATUS_IN_PROGRESS,
-    STATUS_READY_REVIEW,
     STATUS_WAITING_MANAGER,
     TaskDatabase,
 )
@@ -46,10 +46,10 @@ def test_manager_to_assistant_lifecycle(tmp_path):
         solution_file_type="local-file",
     )
 
-    assert task.status == STATUS_WAITING_MANAGER
+    assert task.status == STATUS_APPROVAL
     assert task.solution_text == "Договор готов"
 
-    task = db.update_status(task.id, STATUS_READY_REVIEW, manager_feedback="Поправить пункт 4")
+    task = db.update_status(task.id, STATUS_WAITING_MANAGER, manager_feedback="Поправить пункт 4")
 
     assert task.manager_feedback == "Поправить пункт 4"
 

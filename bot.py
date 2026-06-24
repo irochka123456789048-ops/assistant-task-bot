@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import datetime, timedelta, time, timezone
 import logging
+import os
 from pathlib import Path
 import tempfile
+import time as time_module
 
 from openai import OpenAI
+import requests
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -180,6 +184,24 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def check_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    api_key = get_yandex_api_key()
+    folder_id = os.getenv("YANDEX_FOLDER_ID", "").strip()
+    if not api_key:
+        await update.message.reply_text("YANDEX_API_KEY не найден в переменных окружения Bothost.")
+        return
+    if not folder_id:
+        await update.message.reply_text("YANDEX_FOLDER_ID не найден в переменных окружения Bothost.")
+        return
+
+    masked_key = f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 12 else "ключ слишком короткий"
+    await update.message.reply_text(
+        "Yandex SpeechKit настроен.\n"
+        f"Маска ключа: {masked_key}\n\n"
+        "Теперь отправьте голосовое в группу. Если будет ошибка, бот покажет короткую причину."
+    )
+
+
 async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.removeprefix("/new").strip()
     await create_task_from_text(update, context, text)
@@ -219,7 +241,7 @@ async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT
         await message.reply_text(
             "Не получилось расшифровать голосовое.\n\n"
             f"Короткая причина: {safe_error_text(error)}\n\n"
-            "Проверьте OPENAI_API_KEY на Bothost и активный billing в OpenAI."
+            "Проверьте YANDEX_API_KEY, YANDEX_FOLDER_ID и баланс Yandex Cloud."
         )
         return
 
@@ -238,18 +260,148 @@ async def transcribe_telegram_voice(message: Message) -> str:
         audio_path = Path(temporary_directory) / "voice.ogg"
         await telegram_file.download_to_drive(custom_path=audio_path)
 
-        def transcribe() -> str:
-            client = OpenAI()
-            with audio_path.open("rb") as audio_file:
-                transcription = client.audio.transcriptions.create(
-                    model="gpt-4o-mini-transcribe",
-                    file=audio_file,
-                    response_format="text",
-                    prompt="Это голосовая задача руководителя для ассистента. Расшифруй на русском языке.",
-                )
-            return str(transcription)
+        return await asyncio.to_thread(transcribe_audio_file, audio_path)
 
-        return await asyncio.to_thread(transcribe)
+
+def transcribe_audio_file(audio_path: Path) -> str:
+    provider = os.getenv("VOICE_TRANSCRIBER", "yandex").strip().lower()
+    if provider == "openai":
+        return transcribe_with_openai(audio_path)
+    return transcribe_with_yandex(audio_path)
+
+
+def get_yandex_api_key() -> str:
+    return (
+        os.getenv("YANDEX_API_KEY", "").strip()
+        or os.getenv("YANDEX_SPEECHKIT_API_KEY", "").strip()
+    )
+
+
+def transcribe_with_yandex(audio_path: Path) -> str:
+    api_key = get_yandex_api_key()
+    folder_id = os.getenv("YANDEX_FOLDER_ID", "").strip()
+    if not api_key:
+        raise RuntimeError("YANDEX_API_KEY не найден")
+    if not folder_id:
+        raise RuntimeError("YANDEX_FOLDER_ID не найден")
+
+    audio_content = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+    headers = {"Authorization": f"Api-Key {api_key}"}
+    payload = {
+        "config": {
+            "specification": {
+                "languageCode": os.getenv("YANDEX_STT_LANGUAGE", "ru-RU"),
+                "model": os.getenv("YANDEX_STT_MODEL", "general"),
+                "audioEncoding": "OGG_OPUS",
+                "sampleRateHertz": 48000,
+            },
+            "folderId": folder_id,
+        },
+        "audio": {"content": audio_content},
+    }
+
+    response = requests.post(
+        "https://stt.api.cloud.yandex.net/stt/v3/recognizeFileAsync",
+        headers=headers,
+        json=payload,
+        timeout=30,
+    )
+    ensure_success(response, "Yandex recognizeFileAsync")
+    operation = response.json()
+    operation_id = operation.get("id")
+    if not operation_id:
+        raise RuntimeError("Yandex не вернул operation id")
+
+    wait_for_yandex_operation(operation_id, headers)
+    recognition = requests.get(
+        "https://stt.api.cloud.yandex.net/stt/v3/getRecognition",
+        headers=headers,
+        params={"operationId": operation_id},
+        timeout=30,
+    )
+    ensure_success(recognition, "Yandex getRecognition")
+    return extract_yandex_text(recognition.text)
+
+
+def wait_for_yandex_operation(operation_id: str, headers: dict[str, str]) -> None:
+    timeout_seconds = int(os.getenv("YANDEX_STT_TIMEOUT_SECONDS", "120"))
+    poll_seconds = float(os.getenv("YANDEX_STT_POLL_SECONDS", "2"))
+    deadline = time_module.monotonic() + timeout_seconds
+
+    while time_module.monotonic() < deadline:
+        response = requests.get(
+            f"https://operation.api.cloud.yandex.net/operations/{operation_id}",
+            headers=headers,
+            timeout=15,
+        )
+        ensure_success(response, "Yandex operation status")
+        operation = response.json()
+        if operation.get("done"):
+            if "error" in operation:
+                message = operation["error"].get("message", "ошибка распознавания Yandex")
+                raise RuntimeError(message)
+            return
+        time_module.sleep(poll_seconds)
+
+    raise RuntimeError("Yandex не успел расшифровать голосовое за отведенное время")
+
+
+def extract_yandex_text(raw_text: str) -> str:
+    import json
+
+    texts: list[str] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"text", "normalizedText"} and isinstance(child, str):
+                    texts.append(child)
+                else:
+                    collect(child)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    for line in raw_text.splitlines() or [raw_text]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            collect(json.loads(line))
+        except ValueError:
+            if len(line) < 1000:
+                texts.append(line)
+
+    unique_texts = list(dict.fromkeys(text.strip() for text in texts if text.strip()))
+    return " ".join(unique_texts).strip()
+
+
+def ensure_success(response: requests.Response, service_name: str) -> None:
+    if response.ok:
+        return
+    text = response.text.strip().replace("\n", " ")
+    raise RuntimeError(f"{service_name}: HTTP {response.status_code} {text[:250]}")
+
+
+def transcribe_with_openai(audio_path: Path) -> str:
+    client = OpenAI()
+    try:
+        with audio_path.open("rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=audio_file,
+                response_format="text",
+                prompt="Это голосовая задача руководителя для ассистента. Расшифруй на русском языке.",
+            )
+    except Exception:
+        with audio_path.open("rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="text",
+                prompt="Это голосовая задача руководителя для ассистента. Расшифруй на русском языке.",
+            )
+    return str(transcription)
 
 
 def safe_error_text(error: Exception) -> str:
@@ -258,6 +410,8 @@ def safe_error_text(error: Exception) -> str:
         return error.__class__.__name__
     if "sk-" in text:
         return "ошибка OpenAI API, ключ скрыт"
+    if "Api-Key" in text or "YANDEX_API_KEY" in text:
+        return text.replace(os.getenv("YANDEX_API_KEY", ""), "ключ скрыт")
     return text[:300]
 
 
@@ -895,6 +1049,8 @@ def build_application(settings: Settings | None = None, db: TaskDatabase | None 
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("whoami", whoami))
+    application.add_handler(CommandHandler("check_voice", check_voice))
+    application.add_handler(CommandHandler("check_openai", check_voice))
     application.add_handler(CommandHandler("new", new_task))
     application.add_handler(CommandHandler("submit", submit_task))
     application.add_handler(CommandHandler("list", list_tasks))
