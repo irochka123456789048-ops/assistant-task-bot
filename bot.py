@@ -217,7 +217,9 @@ async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT
     except Exception as error:
         logging.exception("Voice transcription failed")
         await message.reply_text(
-            "Не получилось расшифровать голосовое. Проверьте, что на Bothost добавлена переменная OPENAI_API_KEY."
+            "Не получилось расшифровать голосовое.\n\n"
+            f"Короткая причина: {safe_error_text(error)}\n\n"
+            "Проверьте OPENAI_API_KEY на Bothost и активный billing в OpenAI."
         )
         return
 
@@ -248,6 +250,15 @@ async def transcribe_telegram_voice(message: Message) -> str:
             return str(transcription)
 
         return await asyncio.to_thread(transcribe)
+
+
+def safe_error_text(error: Exception) -> str:
+    text = str(error).strip().replace("\n", " ")
+    if not text:
+        return error.__class__.__name__
+    if "sk-" in text:
+        return "ошибка OpenAI API, ключ скрыт"
+    return text[:300]
 
 
 async def submit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
