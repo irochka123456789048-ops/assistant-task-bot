@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, time, timezone
 import logging
+from pathlib import Path
+import tempfile
 
+from openai import OpenAI
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -182,6 +185,71 @@ async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await create_task_from_text(update, context, text)
 
 
+async def group_task_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    message = update.message
+    if message is None or message.text is None:
+        return
+
+    if message.from_user is None or not is_manager(message.from_user.id, settings):
+        return
+
+    text = message.text.strip()
+    if not text:
+        return
+
+    await create_task_from_text(update, context, text, source_chat_id=message.chat_id)
+
+
+async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    message = update.message
+    if message is None or message.voice is None:
+        return
+
+    if message.from_user is None or not is_manager(message.from_user.id, settings):
+        return
+
+    await message.reply_text("Слушаю голосовое и превращаю его в задачу...")
+
+    try:
+        transcript = await transcribe_telegram_voice(message)
+    except Exception as error:
+        logging.exception("Voice transcription failed")
+        await message.reply_text(
+            "Не получилось расшифровать голосовое. Проверьте, что на Bothost добавлена переменная OPENAI_API_KEY."
+        )
+        return
+
+    transcript = transcript.strip()
+    if not transcript:
+        await message.reply_text("Голосовое распознано пустым. Попробуйте записать ещё раз.")
+        return
+
+    await create_task_from_text(update, context, transcript, source_chat_id=message.chat_id)
+
+
+async def transcribe_telegram_voice(message: Message) -> str:
+    telegram_file = await message.voice.get_file()
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        audio_path = Path(temporary_directory) / "voice.ogg"
+        await telegram_file.download_to_drive(custom_path=audio_path)
+
+        def transcribe() -> str:
+            client = OpenAI()
+            with audio_path.open("rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    model="gpt-4o-mini-transcribe",
+                    file=audio_file,
+                    response_format="text",
+                    prompt="Это голосовая задача руководителя для ассистента. Расшифруй на русском языке.",
+                )
+            return str(transcription)
+
+        return await asyncio.to_thread(transcribe)
+
+
 async def submit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await submit_task_from_message(update, context)
 
@@ -243,7 +311,12 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def create_task_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+async def create_task_from_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    source_chat_id: int | None = None,
+) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
     user_id = update.effective_user.id
@@ -278,10 +351,14 @@ async def create_task_from_text(update: Update, context: ContextTypes.DEFAULT_TY
         created_by_role="manager",
     )
 
-    await update.message.reply_text(
-        f"Задача создана и отправлена ассистенту:\n\n{task_text(task)}",
-        reply_markup=main_menu(user_id, settings),
-    )
+    if update.message.chat.type == "private":
+        await update.message.reply_text(
+            f"Задача создана и отправлена ассистенту:\n\n{task_text(task)}",
+            reply_markup=main_menu(user_id, settings),
+        )
+    else:
+        await update.message.reply_text(f"Задача #{task.id} создана и отправлена ассистенту.")
+
     await context.bot.send_message(
         chat_id=assistant_id,
         text="Новая задача от руководителя. Выберите статус и затем напишите комментарий:\n\n"
@@ -816,6 +893,8 @@ def build_application(settings: Settings | None = None, db: TaskDatabase | None 
     application.add_handler(MessageHandler(filters.CaptionRegex(r"^/submit"), submit_task))
     application.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & filters.CaptionRegex(r"^\d+"), handle_attachment))
     application.add_handler(CallbackQueryHandler(handle_button))
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.VOICE, group_voice_task_message))
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_task_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_plain_text))
 
     if application.job_queue:
