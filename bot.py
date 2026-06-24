@@ -286,18 +286,29 @@ def transcribe_with_yandex(audio_path: Path) -> str:
         raise RuntimeError("YANDEX_FOLDER_ID не найден")
 
     audio_content = base64.b64encode(audio_path.read_bytes()).decode("ascii")
-    headers = {"Authorization": f"Api-Key {api_key}"}
+    headers = {
+        "Authorization": f"Api-Key {api_key}",
+        "x-folder-id": folder_id,
+    }
     payload = {
-        "config": {
-            "specification": {
-                "languageCode": os.getenv("YANDEX_STT_LANGUAGE", "ru-RU"),
-                "model": os.getenv("YANDEX_STT_MODEL", "general"),
-                "audioEncoding": "OGG_OPUS",
-                "sampleRateHertz": 48000,
+        "content": audio_content,
+        "recognitionModel": {
+            "model": os.getenv("YANDEX_STT_MODEL", "general"),
+            "audioFormat": {
+                "containerAudio": {
+                    "containerAudioType": "OGG_OPUS",
+                },
             },
-            "folderId": folder_id,
+            "languageRestriction": {
+                "restrictionType": "WHITELIST",
+                "languageCode": [os.getenv("YANDEX_STT_LANGUAGE", "ru-RU")],
+            },
+            "textNormalization": {
+                "textNormalization": "TEXT_NORMALIZATION_ENABLED",
+                "profanityFilter": False,
+                "literatureText": False,
+            },
         },
-        "audio": {"content": audio_content},
     }
 
     response = requests.post(
