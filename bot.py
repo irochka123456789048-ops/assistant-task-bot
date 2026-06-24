@@ -4,7 +4,15 @@ import asyncio
 from datetime import datetime, timedelta, time, timezone
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -42,6 +50,14 @@ STATUS_BY_KEY = {
     "done": STATUS_DONE,
 }
 
+MENU_NEW_TASK = "Создать задачу"
+MENU_LIST = "Список задач"
+MENU_WAITING = "Ждут руководителя"
+MENU_SUMMARY = "Сводка"
+MENU_SUBMIT = "Сдать результат"
+MENU_WHOAMI = "Мой Telegram ID"
+MENU_CANCEL = "Отмена"
+
 
 def is_assistant(user_id: int, settings: Settings) -> bool:
     return user_id in settings.assistant_ids
@@ -55,6 +71,20 @@ def pick_assistant_id(settings: Settings) -> int | None:
     if not settings.assistant_ids:
         return None
     return next(iter(settings.assistant_ids))
+
+
+def main_menu(user_id: int, settings: Settings) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton | str]] = []
+    if is_manager(user_id, settings):
+        rows.append([MENU_NEW_TASK])
+    rows.append([MENU_LIST, MENU_WAITING])
+    rows.append([MENU_SUMMARY, MENU_SUBMIT])
+    rows.append([MENU_WHOAMI])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
+def cancel_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[MENU_CANCEL]], resize_keyboard=True)
 
 
 def task_text(task: Task, include_solution: bool = True) -> str:
@@ -113,26 +143,86 @@ def manager_decision_keyboard(task_id: int) -> InlineKeyboardMarkup:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    user_id = update.effective_user.id
     await update.message.reply_text(
         "Здравствуйте! Я бот для задач руководителя и ассистента.\n\n"
-        "Руководитель ставит задачу:\n"
-        "/new Название | дедлайн | комментарий\n\n"
-        "Ассистент получает задачу, выбирает статус кнопкой и пишет комментарий.\n"
-        "Когда задача готова, ассистент сдаёт результат:\n"
-        "/submit ID | результат\n\n"
-        "Полезные команды:\n"
-        "/whoami - показать ваш Telegram ID\n"
-        "/list - активные задачи\n"
-        "/waiting - задачи, которые ждут руководителя\n"
-        "/summary - сводка"
+        "Теперь можно пользоваться кнопками внизу экрана.\n"
+        "Руководитель создаёт задачу кнопкой, ассистент получает её и выбирает статус.",
+        reply_markup=main_menu(user_id, settings),
     )
 
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(f"Ваш Telegram ID: {update.effective_user.id}")
+    settings: Settings = context.application.bot_data["settings"]
+    await update.message.reply_text(
+        f"Ваш Telegram ID: {update.effective_user.id}",
+        reply_markup=main_menu(update.effective_user.id, settings),
+    )
 
 
 async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = update.message.text.removeprefix("/new").strip()
+    await create_task_from_text(update, context, text)
+
+
+async def submit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await submit_task_from_message(update, context)
+
+
+async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    db: TaskDatabase = context.application.bot_data["db"]
+    await update.message.reply_text(
+        format_task_list(db.list_tasks(), "Активные задачи"),
+        reply_markup=main_menu(update.effective_user.id, settings),
+    )
+
+
+async def waiting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    db: TaskDatabase = context.application.bot_data["db"]
+    await update.message.reply_text(
+        format_task_list(db.list_tasks(MANAGER_PENDING_STATUSES), "Ждут руководителя"),
+        reply_markup=main_menu(update.effective_user.id, settings),
+    )
+
+
+async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    db: TaskDatabase = context.application.bot_data["db"]
+    rows = db.count_by_status()
+    if not rows:
+        await update.message.reply_text(
+            "Пока задач нет.",
+            reply_markup=main_menu(update.effective_user.id, settings),
+        )
+        return
+    await update.message.reply_text(
+        "Сводка:\n" + "\n".join(f"{status}: {count}" for status, count in rows),
+        reply_markup=main_menu(update.effective_user.id, settings),
+    )
+
+
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    db: TaskDatabase = context.application.bot_data["db"]
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Напишите номер задачи: /done 1")
+        return
+
+    try:
+        task = db.update_status(int(context.args[0]), STATUS_DONE)
+    except KeyError:
+        await update.message.reply_text("Такой задачи нет.")
+        return
+    await update.message.reply_text(
+        f"Готово:\n\n{task_text(task)}",
+        reply_markup=main_menu(update.effective_user.id, settings),
+    )
+
+
+async def create_task_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
     user_id = update.effective_user.id
@@ -143,15 +233,15 @@ async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     assistant_id = pick_assistant_id(settings)
     if assistant_id is None:
-        await update.message.reply_text("В .env не указан ASSISTANT_IDS.")
+        await update.message.reply_text("В настройках не указан ASSISTANT_IDS.")
         return
 
-    text = update.message.text.removeprefix("/new").strip()
     parts = [part.strip() for part in text.split("|")]
     if len(parts) < 2 or not parts[0] or not parts[1]:
         await update.message.reply_text(
-            "Напишите так:\n/new Название задачи | дедлайн | комментарий\n\n"
-            "Пример:\n/new Подготовить договор | завтра 18:00 | проверить сумму"
+            "Напишите так:\nНазвание задачи | дедлайн | комментарий\n\n"
+            "Пример:\nПодготовить договор | завтра 18:00 | проверить сумму",
+            reply_markup=cancel_menu(),
         )
         return
 
@@ -165,7 +255,10 @@ async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         created_by_role="manager",
     )
 
-    await update.message.reply_text(f"Задача создана и отправлена ассистенту:\n\n{task_text(task)}")
+    await update.message.reply_text(
+        f"Задача создана и отправлена ассистенту:\n\n{task_text(task)}",
+        reply_markup=main_menu(user_id, settings),
+    )
     await context.bot.send_message(
         chat_id=assistant_id,
         text="Новая задача от руководителя. Выберите статус и затем напишите комментарий:\n\n"
@@ -174,7 +267,7 @@ async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def submit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def submit_task_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
     user_id = update.effective_user.id
@@ -186,9 +279,10 @@ async def submit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     parsed = parse_submit_message(update.message)
     if parsed is None:
         await update.message.reply_text(
-            "Напишите так:\n/submit 1 | что сделано\n\n"
-            "Файл тоже можно отправить: прикрепите документ или фото и добавьте подпись\n"
-            "/submit 1 | комментарий к результату"
+            "Напишите так:\nНомер задачи | что сделано\n\n"
+            "Можно отправить файл или фото с подписью:\n"
+            "Номер задачи | комментарий к результату",
+            reply_markup=cancel_menu(),
         )
         return
 
@@ -212,7 +306,10 @@ async def submit_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await send_result_to_manager(context, manager_id, task)
-    await update.message.reply_text(f"Результат отправлен руководителю:\n\n{task_text(task)}")
+    await update.message.reply_text(
+        f"Результат отправлен руководителю:\n\n{task_text(task)}",
+        reply_markup=main_menu(user_id, settings),
+    )
 
 
 def parse_submit_message(message: Message) -> tuple[int, str, str, str, str] | None:
@@ -353,9 +450,70 @@ async def handle_manager_decision_button(
 
 
 async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
     user_id = update.effective_user.id
     text = update.message.text.strip()
     db: TaskDatabase = context.application.bot_data["db"]
+
+    if text == MENU_CANCEL:
+        context.user_data.clear()
+        await update.message.reply_text(
+            "Действие отменено.",
+            reply_markup=main_menu(user_id, settings),
+        )
+        return
+
+    state = context.user_data.get("state")
+    if state == "create_task":
+        context.user_data.clear()
+        await create_task_from_text(update, context, text)
+        return
+
+    if state == "submit_result":
+        context.user_data.clear()
+        await submit_task_from_message(update, context)
+        return
+
+    if text == MENU_NEW_TASK:
+        if not is_manager(user_id, settings):
+            await update.message.reply_text("Эта кнопка доступна только руководителю.")
+            return
+        context.user_data["state"] = "create_task"
+        await update.message.reply_text(
+            "Напишите задачу в формате:\nНазвание | дедлайн | комментарий\n\n"
+            "Пример:\nПодготовить договор | завтра 18:00 | проверить сумму",
+            reply_markup=cancel_menu(),
+        )
+        return
+
+    if text == MENU_SUBMIT:
+        if not is_assistant(user_id, settings):
+            await update.message.reply_text("Эта кнопка доступна только ассистенту.")
+            return
+        context.user_data["state"] = "submit_result"
+        await update.message.reply_text(
+            "Напишите результат в формате:\nНомер задачи | что сделано\n\n"
+            "Пример:\n1 | Договор готов\n\n"
+            "Можно прикрепить файл или фото и добавить такую же подпись.",
+            reply_markup=cancel_menu(),
+        )
+        return
+
+    if text == MENU_LIST:
+        await list_tasks(update, context)
+        return
+
+    if text == MENU_WAITING:
+        await waiting(update, context)
+        return
+
+    if text == MENU_SUMMARY:
+        await summary(update, context)
+        return
+
+    if text == MENU_WHOAMI:
+        await whoami(update, context)
+        return
 
     pending_assistant = context.application.bot_data.setdefault("pending_assistant_comments", {})
     if user_id in pending_assistant:
@@ -367,7 +525,10 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text("Такой задачи нет.")
             return
 
-        await update.message.reply_text(f"Статус сохранён:\n\n{task_text(task)}")
+        await update.message.reply_text(
+            f"Статус сохранён:\n\n{task_text(task)}",
+            reply_markup=main_menu(user_id, settings),
+        )
         if task.manager_id:
             await context.bot.send_message(
                 chat_id=task.manager_id,
@@ -384,44 +545,31 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text("Такой задачи нет.")
             return
 
-        await update.message.reply_text(f"Комментарий отправлен ассистенту:\n\n{task_text(task)}")
+        await update.message.reply_text(
+            f"Комментарий отправлен ассистенту:\n\n{task_text(task)}",
+            reply_markup=main_menu(user_id, settings),
+        )
         await context.bot.send_message(
             chat_id=task.assistant_id,
             text=f"Руководитель дал обратную связь по задаче #{task.id}:\n\n{task_text(task)}",
         )
-
-
-async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db: TaskDatabase = context.application.bot_data["db"]
-    await update.message.reply_text(format_task_list(db.list_tasks(), "Активные задачи"))
-
-
-async def waiting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db: TaskDatabase = context.application.bot_data["db"]
-    await update.message.reply_text(format_task_list(db.list_tasks(MANAGER_PENDING_STATUSES), "Ждут руководителя"))
-
-
-async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db: TaskDatabase = context.application.bot_data["db"]
-    rows = db.count_by_status()
-    if not rows:
-        await update.message.reply_text("Пока задач нет.")
-        return
-    await update.message.reply_text("Сводка:\n" + "\n".join(f"{status}: {count}" for status, count in rows))
-
-
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db: TaskDatabase = context.application.bot_data["db"]
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Напишите номер задачи: /done 1")
         return
 
-    try:
-        task = db.update_status(int(context.args[0]), STATUS_DONE)
-    except KeyError:
-        await update.message.reply_text("Такой задачи нет.")
+    await update.message.reply_text(
+        "Выберите действие кнопкой внизу или напишите /start.",
+        reply_markup=main_menu(user_id, settings),
+    )
+
+
+async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    user_id = update.effective_user.id
+    if context.user_data.get("state") != "submit_result":
         return
-    await update.message.reply_text(f"Готово:\n\n{task_text(task)}")
+
+    context.user_data.clear()
+    await submit_task_from_message(update, context)
+    await update.message.reply_text(reply_markup=main_menu(user_id, settings), text="Меню возвращено.")
 
 
 async def remind_managers(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -478,6 +626,7 @@ def build_application(settings: Settings | None = None, db: TaskDatabase | None 
     application.add_handler(CommandHandler("summary", summary))
     application.add_handler(CommandHandler("done", done))
     application.add_handler(MessageHandler(filters.CaptionRegex(r"^/submit"), submit_task))
+    application.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & filters.CaptionRegex(r"^\d+"), handle_attachment))
     application.add_handler(CallbackQueryHandler(handle_button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_plain_text))
 
