@@ -50,6 +50,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+MSK = timezone(timedelta(hours=3))
+
 STATUS_BY_KEY = {
     "work": STATUS_IN_PROGRESS,
     "wait": STATUS_WAITING_MANAGER,
@@ -64,10 +66,31 @@ STATUS_BY_KEY = {
 MENU_NEW_TASK = "Создать задачу"
 MENU_LIST = "Список задач"
 MENU_WAITING = "Ждут руководителя"
+MENU_MANAGER_WAITING = "Ждут ответа/решения"
 MENU_SUMMARY = "Сводка"
+MENU_MANAGER_SUMMARY = "Сводка по задачам"
 MENU_SUBMIT = "Сдать результат"
+MENU_DONE_TASKS = "Выполненные задачи"
 MENU_WHOAMI = "Мой Telegram ID"
 MENU_CANCEL = "Отмена"
+
+STATUS_LABELS = {
+    STATUS_DONE: "🟢 Выполнено",
+    STATUS_STUCK: "🔴 Зависло",
+    STATUS_IN_PROGRESS: "🟡 В работе",
+    STATUS_WAITING_MANAGER: "🔵 Жду решения",
+    STATUS_APPROVAL: "🟣 На согласовании",
+    STATUS_NEEDS_INPUT: "❔ Жду комментарии",
+    STATUS_POSTPONED: "🟠 Перенос",
+    STATUS_CANCELLED: "⚫ Отмена",
+}
+
+MANAGER_DECISION_LABELS = {
+    "approve": "🟢 Выполнено",
+    "changes": "🟡 На доработку",
+    "question": "❔ Уточнение",
+    "comment": "💬 Комментарий",
+}
 
 
 def is_assistant(user_id: int, settings: Settings) -> bool:
@@ -84,12 +107,27 @@ def pick_assistant_id(settings: Settings) -> int | None:
     return next(iter(settings.assistant_ids))
 
 
+def pick_manager_id(settings: Settings) -> int | None:
+    if not settings.manager_ids:
+        return None
+    return next(iter(settings.manager_ids))
+
+
 def main_menu(user_id: int, settings: Settings) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton | str]] = []
     if is_manager(user_id, settings):
         rows.append([MENU_NEW_TASK])
-    rows.append([MENU_LIST, MENU_WAITING])
-    rows.append([MENU_SUMMARY, MENU_SUBMIT])
+        rows.append([MENU_MANAGER_WAITING])
+        rows.append([MENU_MANAGER_SUMMARY])
+        rows.append([MENU_DONE_TASKS])
+    elif is_assistant(user_id, settings):
+        rows.append([MENU_NEW_TASK])
+        rows.append([MENU_SUBMIT])
+        rows.append([MENU_WAITING])
+        rows.append([MENU_SUMMARY])
+    else:
+        rows.append([MENU_LIST])
+        rows.append([MENU_SUMMARY])
     rows.append([MENU_WHOAMI])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
@@ -98,10 +136,31 @@ def cancel_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[MENU_CANCEL]], resize_keyboard=True)
 
 
+def status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status)
+
+
+def format_datetime(value: str | None) -> str:
+    if not value:
+        return "не указано"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return parsed.astimezone(MSK).strftime("%d.%m.%Y %H:%M")
+
+
+def short_task_button(task: Task) -> str:
+    task_time = task.submitted_at or task.status_changed_at or task.created_at
+    return f"#{task.id} {task.title[:32]} | {status_label(task.status)} | {format_datetime(task_time)}"
+
+
 def task_text(task: Task, include_solution: bool = True) -> str:
     lines = [
         f"#{task.id} {task.title}",
-        f"Статус: {task.status}",
+        f"Статус: {status_label(task.status)}",
+        f"Поступила: {format_datetime(task.created_at)}",
+        f"Статус изменён: {format_datetime(task.status_changed_at or task.created_at)}",
     ]
 
     if task.deadline:
@@ -117,6 +176,10 @@ def task_text(task: Task, include_solution: bool = True) -> str:
         lines.append(f"Результат: {task.solution_text}")
     if include_solution and task.solution_file_name:
         lines.append(f"Файл результата: {task.solution_file_name}")
+    if task.submitted_at:
+        lines.append(f"Сдана ассистентом: {format_datetime(task.submitted_at)}")
+    if task.status == STATUS_DONE:
+        lines.append(f"Перешла в выполненное: {format_datetime(task.status_changed_at or task.submitted_at)}")
 
     return "\n".join(lines)
 
@@ -125,20 +188,20 @@ def assistant_status_keyboard(task_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("В работе", callback_data=f"assistant_status:work:{task_id}"),
-                InlineKeyboardButton("Жду решения", callback_data=f"assistant_status:wait:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_IN_PROGRESS), callback_data=f"assistant_status:work:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_WAITING_MANAGER), callback_data=f"assistant_status:wait:{task_id}"),
             ],
             [
-                InlineKeyboardButton("На согласовании", callback_data=f"assistant_status:approval:{task_id}"),
-                InlineKeyboardButton("Жду комментарии", callback_data=f"assistant_status:input:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_APPROVAL), callback_data=f"assistant_status:approval:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_NEEDS_INPUT), callback_data=f"assistant_status:input:{task_id}"),
             ],
             [
-                InlineKeyboardButton("Зависло", callback_data=f"assistant_status:stuck:{task_id}"),
-                InlineKeyboardButton("Перенос", callback_data=f"assistant_status:postponed:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_STUCK), callback_data=f"assistant_status:stuck:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_POSTPONED), callback_data=f"assistant_status:postponed:{task_id}"),
             ],
             [
-                InlineKeyboardButton("Отмена", callback_data=f"assistant_status:cancelled:{task_id}"),
-                InlineKeyboardButton("Выполнено", callback_data=f"assistant_status:done:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_CANCELLED), callback_data=f"assistant_status:cancelled:{task_id}"),
+                InlineKeyboardButton(status_label(STATUS_DONE), callback_data=f"assistant_status:done:{task_id}"),
             ],
         ]
     )
@@ -148,12 +211,12 @@ def manager_decision_keyboard(task_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Одобрить", callback_data=f"manager_decision:approve:{task_id}"),
-                InlineKeyboardButton("Нужны правки", callback_data=f"manager_decision:changes:{task_id}"),
+                InlineKeyboardButton(MANAGER_DECISION_LABELS["approve"], callback_data=f"manager_decision:approve:{task_id}"),
+                InlineKeyboardButton(MANAGER_DECISION_LABELS["changes"], callback_data=f"manager_decision:changes:{task_id}"),
             ],
             [
-                InlineKeyboardButton("Задать вопрос", callback_data=f"manager_decision:question:{task_id}"),
-                InlineKeyboardButton("Позже", callback_data=f"manager_decision:later:{task_id}"),
+                InlineKeyboardButton(MANAGER_DECISION_LABELS["question"], callback_data=f"manager_decision:question:{task_id}"),
+                InlineKeyboardButton(MANAGER_DECISION_LABELS["comment"], callback_data=f"manager_decision:comment:{task_id}"),
             ],
         ]
     )
@@ -435,31 +498,62 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def waiting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
-    await update.message.reply_text(
-        format_task_list(db.list_tasks(MANAGER_PENDING_STATUSES), "Ждут руководителя"),
-        reply_markup=main_menu(update.effective_user.id, settings),
-    )
+    user_id = update.effective_user.id
+    if is_manager(user_id, settings):
+        statuses = tuple(status for status in STATUS_BY_KEY.values() if status != STATUS_DONE)
+        await show_status_picker(update, db, statuses, "Ждут ответа/решения")
+        return
+    await show_status_picker(update, db, MANAGER_PENDING_STATUSES, "Ждут руководителя")
 
 
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
-    rows = db.count_by_status()
+    await show_status_picker(update, db, tuple(STATUS_BY_KEY.values()), "Сводка по задачам")
+
+
+async def done_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db: TaskDatabase = context.application.bot_data["db"]
+    await show_task_list(update, db.list_tasks((STATUS_DONE,)), "Выполненные задачи")
+
+
+async def show_status_picker(
+    update: Update,
+    db: TaskDatabase,
+    statuses: tuple[str, ...],
+    title: str,
+) -> None:
+    rows = []
+    for status in statuses:
+        tasks = db.list_tasks((status,))
+        if tasks:
+            rows.append([
+                InlineKeyboardButton(
+                    f"{status_label(status)}: {len(tasks)}",
+                    callback_data=f"summary_status:{status}",
+                )
+            ])
+
     if not rows:
-        await update.message.reply_text(
-            "Пока задач нет.",
-            reply_markup=main_menu(update.effective_user.id, settings),
-        )
+        await update.message.reply_text(f"{title}: задач нет.")
         return
 
-    keyboard = [
-        [InlineKeyboardButton(f"{status}: {count}", callback_data=f"summary_status:{status}")]
-        for status, count in rows
-    ]
     await update.message.reply_text(
-        "Выберите статус, чтобы посмотреть задачи:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"{title}. Выберите статус:",
+        reply_markup=InlineKeyboardMarkup(rows),
     )
+
+
+async def show_task_list(update: Update, tasks: list[Task], title: str) -> None:
+    if not tasks:
+        await update.message.reply_text(f"{title}: задач нет.")
+        return
+
+    rows = [
+        [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{task.id}")]
+        for task in tasks[:40]
+    ]
+    await update.message.reply_text(title, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -490,13 +584,19 @@ async def create_task_from_text(
     db: TaskDatabase = context.application.bot_data["db"]
     user_id = update.effective_user.id
 
-    if not is_manager(user_id, settings):
-        await update.message.reply_text("Создавать задачи может только руководитель.")
+    if not is_manager(user_id, settings) and not is_assistant(user_id, settings):
+        await update.message.reply_text("Создавать задачи может только ассистент или руководитель.")
         return
 
-    assistant_id = pick_assistant_id(settings)
+    created_by_role = "manager" if is_manager(user_id, settings) else "assistant"
+    assistant_id = pick_assistant_id(settings) if created_by_role == "manager" else user_id
+    manager_id = user_id if created_by_role == "manager" else pick_manager_id(settings)
+
     if assistant_id is None:
         await update.message.reply_text("В настройках не указан ASSISTANT_IDS.")
+        return
+    if created_by_role == "assistant" and manager_id is None:
+        await update.message.reply_text("В настройках не указан MANAGER_IDS.")
         return
 
     title, deadline, comment = parse_task_input(text)
@@ -515,25 +615,29 @@ async def create_task_from_text(
         deadline=deadline,
         comment=comment,
         assistant_id=assistant_id,
-        manager_id=user_id,
+        manager_id=manager_id,
         created_by_id=user_id,
-        created_by_role="manager",
+        created_by_role=created_by_role,
     )
 
     if update.message.chat.type == "private":
+        created_text = "Задача создана."
+        if created_by_role == "manager":
+            created_text = "Задача создана и отправлена ассистенту."
         await update.message.reply_text(
-            f"Задача создана и отправлена ассистенту:\n\n{task_text(task)}",
+            f"{created_text}\n\n{task_text(task)}",
             reply_markup=main_menu(user_id, settings),
         )
     else:
         await update.message.reply_text(f"Задача #{task.id} создана и отправлена ассистенту.")
 
-    await context.bot.send_message(
-        chat_id=assistant_id,
-        text="Новая задача от руководителя. Выберите статус и затем напишите комментарий:\n\n"
-        f"{task_text(task)}",
-        reply_markup=assistant_status_keyboard(task.id),
-    )
+    if created_by_role == "manager":
+        await context.bot.send_message(
+            chat_id=assistant_id,
+            text="Новая задача от руководителя. Выберите статус и затем напишите комментарий:\n\n"
+            f"{task_text(task)}",
+            reply_markup=assistant_status_keyboard(task.id),
+        )
 
 
 def parse_task_input(text: str) -> tuple[str, str, str]:
@@ -621,6 +725,14 @@ def parse_submit_message(message: Message, selected_task_id: int | None = None) 
         file_id = message.photo[-1].file_id
         file_name = "photo"
         file_type = "photo"
+    elif message.voice:
+        file_id = message.voice.file_id
+        file_name = "voice"
+        file_type = "voice"
+    elif message.audio:
+        file_id = message.audio.file_id
+        file_name = message.audio.file_name or "audio"
+        file_type = "audio"
 
     if not solution_text and not file_id:
         return None
@@ -644,6 +756,24 @@ async def send_result_to_manager(context: ContextTypes.DEFAULT_TYPE, manager_id:
         await context.bot.send_photo(
             chat_id=manager_id,
             photo=task.solution_file_id,
+            caption=text,
+            reply_markup=manager_decision_keyboard(task.id),
+        )
+        return
+
+    if task.solution_file_id and task.solution_file_type == "voice":
+        await context.bot.send_voice(
+            chat_id=manager_id,
+            voice=task.solution_file_id,
+            caption=text,
+            reply_markup=manager_decision_keyboard(task.id),
+        )
+        return
+
+    if task.solution_file_id and task.solution_file_type == "audio":
+        await context.bot.send_audio(
+            chat_id=manager_id,
+            audio=task.solution_file_id,
             caption=text,
             reply_markup=manager_decision_keyboard(task.id),
         )
@@ -728,7 +858,7 @@ async def handle_summary_status_button(
         return
 
     rows = [
-        [InlineKeyboardButton(f"#{task.id} {task.title[:40]}", callback_data=f"task_card:{task.id}")]
+        [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{task.id}")]
         for task in tasks[:30]
     ]
     await update.callback_query.edit_message_text(
@@ -742,7 +872,9 @@ async def handle_task_card_button(
     context: ContextTypes.DEFAULT_TYPE,
     parts: list[str],
 ) -> None:
+    settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
+    user_id = update.callback_query.from_user.id
     task_id = int(parts[1])
 
     try:
@@ -751,13 +883,17 @@ async def handle_task_card_button(
         await update.callback_query.edit_message_text("Такой задачи нет.")
         return
 
-    rows = [
-        [InlineKeyboardButton("Сдать результат по этой задаче", callback_data=f"pick_submit:{task.id}")],
-        [InlineKeyboardButton("Изменить статус", callback_data=f"change_status:{task.id}")],
-    ]
+    rows = []
+    if is_assistant(user_id, settings):
+        rows.extend([
+            [InlineKeyboardButton("Сдать результат по этой задаче", callback_data=f"pick_submit:{task.id}")],
+            [InlineKeyboardButton("Изменить статус", callback_data=f"change_status:{task.id}")],
+        ])
+    if is_manager(user_id, settings) and task.status != STATUS_DONE:
+        rows.append([InlineKeyboardButton("Дать решение/комментарий", callback_data=f"manager_decision:comment:{task.id}")])
     await update.callback_query.edit_message_text(
         task_text(task),
-        reply_markup=InlineKeyboardMarkup(rows),
+        reply_markup=InlineKeyboardMarkup(rows) if rows else None,
     )
 
 
@@ -830,15 +966,15 @@ async def handle_manager_decision_button(
     status_by_decision = {
         "changes": STATUS_NEEDS_INPUT,
         "question": STATUS_NEEDS_INPUT,
-        "later": STATUS_STUCK,
+        "comment": STATUS_NEEDS_INPUT,
     }
     status = status_by_decision[decision]
     pending = context.application.bot_data.setdefault("pending_manager_feedback", {})
     pending[query.from_user.id] = (task_id, status)
 
     await query.edit_message_text(
-        f"Вы выбрали статус: {status}\n\n"
-        "Теперь напишите комментарий для ассистента: правки, вопрос или причину, почему позже."
+        f"Вы выбрали: {MANAGER_DECISION_LABELS.get(decision, status)}\n\n"
+        "Теперь напишите комментарий для ассистента: что доработать, что уточнить или какой комментарий передать."
     )
 
 
@@ -895,8 +1031,8 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if text == MENU_NEW_TASK:
-        if not is_manager(user_id, settings):
-            await update.message.reply_text("Эта кнопка доступна только руководителю.")
+        if not is_manager(user_id, settings) and not is_assistant(user_id, settings):
+            await update.message.reply_text("Эта кнопка доступна только ассистенту или руководителю.")
             return
         context.user_data["state"] = "create_task"
         await update.message.reply_text(
@@ -919,12 +1055,16 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await list_tasks(update, context)
         return
 
-    if text == MENU_WAITING:
+    if text in {MENU_WAITING, MENU_MANAGER_WAITING}:
         await waiting(update, context)
         return
 
-    if text == MENU_SUMMARY:
+    if text in {MENU_SUMMARY, MENU_MANAGER_SUMMARY}:
         await summary(update, context)
+        return
+
+    if text == MENU_DONE_TASKS:
+        await done_tasks(update, context)
         return
 
     if text == MENU_WHOAMI:
@@ -1009,24 +1149,36 @@ async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def remind_managers(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
-    now = datetime.now(timezone.utc)
-    remind_after = timedelta(minutes=settings.reminder_after_minutes)
 
-    for task in db.list_tasks(MANAGER_PENDING_STATUSES):
-        if not task.manager_id or not task.sent_at:
-            continue
+    for manager_id in settings.manager_ids:
+        sent_any = False
+        for status in MANAGER_PENDING_STATUSES:
+            tasks = [
+                task
+                for task in db.list_tasks((status,))
+                if task.manager_id == manager_id or task.created_by_id == manager_id
+            ]
+            if not tasks:
+                continue
 
-        last_touch = task.last_reminded_at or task.sent_at
-        last_touch_dt = datetime.fromisoformat(last_touch)
-        if now - last_touch_dt < remind_after:
-            continue
+            sent_any = True
+            rows = [
+                [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{task.id}")]
+                for task in tasks[:30]
+            ]
+            await context.bot.send_message(
+                chat_id=manager_id,
+                text=f"Напоминание на 10:00 МСК\n{status_label(status)}: {len(tasks)}",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+            for task in tasks:
+                db.mark_reminded(task.id)
 
-        await context.bot.send_message(
-            chat_id=task.manager_id,
-            text=f"Напоминание: задача ждёт вашего решения.\n\n{task_text(task)}",
-            reply_markup=manager_decision_keyboard(task.id),
-        )
-        db.mark_reminded(task.id)
+        if not sent_any:
+            await context.bot.send_message(
+                chat_id=manager_id,
+                text="Напоминание на 10:00 МСК: задач, ожидающих решения, нет.",
+            )
 
 
 async def morning_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1066,13 +1218,17 @@ def build_application(settings: Settings | None = None, db: TaskDatabase | None 
     application.add_handler(CallbackQueryHandler(handle_button))
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.VOICE, group_voice_task_message))
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_task_message))
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.Document.ALL | filters.PHOTO | filters.VOICE | filters.AUDIO), handle_attachment))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_plain_text))
 
     if application.job_queue:
-        application.job_queue.run_repeating(remind_managers, interval=60, first=60)
+        application.job_queue.run_daily(
+            remind_managers,
+            time=time(hour=10, minute=0, tzinfo=MSK),
+        )
         application.job_queue.run_daily(
             morning_digest,
-            time=time(hour=settings.digest_hour, minute=settings.digest_minute),
+            time=time(hour=settings.digest_hour, minute=settings.digest_minute, tzinfo=MSK),
         )
 
     return application

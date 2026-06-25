@@ -49,6 +49,7 @@ class Task:
     accepted_at: str | None
     submitted_at: str | None
     sent_at: str | None
+    status_changed_at: str | None
     last_reminded_at: str | None
     assistant_comment: str
     manager_feedback: str
@@ -91,6 +92,7 @@ class TaskDatabase:
                     accepted_at TEXT,
                     submitted_at TEXT,
                     sent_at TEXT,
+                    status_changed_at TEXT,
                     last_reminded_at TEXT,
                     assistant_comment TEXT NOT NULL DEFAULT '',
                     manager_feedback TEXT NOT NULL DEFAULT '',
@@ -105,6 +107,7 @@ class TaskDatabase:
             self._add_column_if_missing(connection, "created_by_role", "TEXT NOT NULL DEFAULT ''")
             self._add_column_if_missing(connection, "accepted_at", "TEXT")
             self._add_column_if_missing(connection, "submitted_at", "TEXT")
+            self._add_column_if_missing(connection, "status_changed_at", "TEXT")
             self._add_column_if_missing(connection, "assistant_comment", "TEXT NOT NULL DEFAULT ''")
             self._add_column_if_missing(connection, "manager_feedback", "TEXT NOT NULL DEFAULT ''")
             self._add_column_if_missing(connection, "solution_text", "TEXT NOT NULL DEFAULT ''")
@@ -136,9 +139,9 @@ class TaskDatabase:
                 """
                 INSERT INTO tasks (
                     title, deadline, comment, status, assistant_id, manager_id,
-                    created_by_id, created_by_role, created_at
+                    created_by_id, created_by_role, created_at, status_changed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     title,
@@ -149,6 +152,7 @@ class TaskDatabase:
                     manager_id,
                     created_by_id,
                     created_by_role,
+                    created_at,
                     created_at,
                 ),
             )
@@ -184,15 +188,16 @@ class TaskDatabase:
         assistant_comment: str | None = None,
         manager_feedback: str | None = None,
     ) -> Task:
-        fields = ["status = ?"]
-        values: list[object] = [status]
+        timestamp = now_iso()
+        fields = ["status = ?", "status_changed_at = ?"]
+        values: list[object] = [status, timestamp]
 
         if assistant_comment is not None:
             fields.append("assistant_comment = ?")
             values.append(assistant_comment)
             if status == STATUS_IN_PROGRESS:
                 fields.append("accepted_at = ?")
-                values.append(now_iso())
+                values.append(timestamp)
 
         if manager_feedback is not None:
             fields.append("manager_feedback = ?")
@@ -201,7 +206,7 @@ class TaskDatabase:
         if status in MANAGER_PENDING_STATUSES:
             fields.append("sent_at = ?")
             fields.append("last_reminded_at = NULL")
-            values.append(now_iso())
+            values.append(timestamp)
 
         values.append(task_id)
         with self.connect() as connection:
@@ -229,6 +234,7 @@ class TaskDatabase:
                     manager_id = ?,
                     submitted_at = ?,
                     sent_at = ?,
+                    status_changed_at = ?,
                     last_reminded_at = NULL,
                     solution_text = ?,
                     solution_file_id = ?,
@@ -239,6 +245,7 @@ class TaskDatabase:
                 (
                     STATUS_APPROVAL,
                     manager_id,
+                    timestamp,
                     timestamp,
                     timestamp,
                     solution_text,
@@ -280,6 +287,7 @@ class TaskDatabase:
             accepted_at=str(row["accepted_at"]) if row["accepted_at"] is not None else None,
             submitted_at=str(row["submitted_at"]) if row["submitted_at"] is not None else None,
             sent_at=str(row["sent_at"]) if row["sent_at"] is not None else None,
+            status_changed_at=str(row["status_changed_at"]) if "status_changed_at" in row.keys() and row["status_changed_at"] is not None else None,
             last_reminded_at=str(row["last_reminded_at"]) if row["last_reminded_at"] is not None else None,
             assistant_comment=str(row["assistant_comment"] or ""),
             manager_feedback=str(row["manager_feedback"] or ""),
