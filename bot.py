@@ -190,14 +190,13 @@ async def check_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not api_key:
         await update.message.reply_text("YANDEX_API_KEY не найден в переменных окружения Bothost.")
         return
-    if not folder_id:
-        await update.message.reply_text("YANDEX_FOLDER_ID не найден в переменных окружения Bothost.")
-        return
 
     masked_key = f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 12 else "ключ слишком короткий"
+    folder_text = folder_id or "не указан, бот возьмет каталог из API-ключа"
     await update.message.reply_text(
         "Yandex SpeechKit настроен.\n"
         f"Маска ключа: {masked_key}\n\n"
+        f"YANDEX_FOLDER_ID: {folder_text}\n\n"
         "Теперь отправьте голосовое в группу. Если будет ошибка, бот покажет короткую причину."
     )
 
@@ -241,7 +240,7 @@ async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT
         await message.reply_text(
             "Не получилось расшифровать голосовое.\n\n"
             f"Короткая причина: {safe_error_text(error)}\n\n"
-            "Проверьте YANDEX_API_KEY, YANDEX_FOLDER_ID и баланс Yandex Cloud."
+            "Проверьте YANDEX_API_KEY и баланс Yandex Cloud."
         )
         return
 
@@ -279,17 +278,11 @@ def get_yandex_api_key() -> str:
 
 def transcribe_with_yandex(audio_path: Path) -> str:
     api_key = get_yandex_api_key()
-    folder_id = os.getenv("YANDEX_FOLDER_ID", "").strip()
     if not api_key:
         raise RuntimeError("YANDEX_API_KEY не найден")
-    if not folder_id:
-        raise RuntimeError("YANDEX_FOLDER_ID не найден")
 
     audio_content = base64.b64encode(audio_path.read_bytes()).decode("ascii")
-    headers = {
-        "Authorization": f"Api-Key {api_key}",
-        "x-folder-id": folder_id,
-    }
+    headers = {"Authorization": f"Api-Key {api_key}"}
     payload = {
         "content": audio_content,
         "recognitionModel": {
