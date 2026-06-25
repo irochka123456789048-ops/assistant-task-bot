@@ -121,12 +121,13 @@ def main_menu(user_id: int, settings: Settings) -> ReplyKeyboardMarkup:
         rows.append([MENU_MANAGER_WAITING])
         rows.append([MENU_MANAGER_SUMMARY])
         rows.append([MENU_DONE_TASKS])
-    elif is_assistant(user_id, settings):
-        rows.append([MENU_NEW_TASK])
+    if is_assistant(user_id, settings):
+        if not is_manager(user_id, settings):
+            rows.append([MENU_NEW_TASK])
         rows.append([MENU_SUBMIT])
         rows.append([MENU_WAITING])
         rows.append([MENU_SUMMARY])
-    else:
+    if not rows:
         rows.append([MENU_LIST])
         rows.append([MENU_SUMMARY])
     rows.append([MENU_WHOAMI])
@@ -154,6 +155,12 @@ def format_datetime(value: str | None) -> str:
 def short_task_button(task: Task) -> str:
     task_time = task.submitted_at or task.status_changed_at or task.created_at
     return f"#{task.id} {task.title[:32]} | {status_label(task.status)} | {format_datetime(task_time)}"
+
+
+def tasks_for_status(db: TaskDatabase, status: str, include_closed: bool = False) -> list[Task]:
+    if include_closed:
+        return [task for task in db.list_all_tasks() if task.status == status]
+    return db.list_tasks((status,))
 
 
 def task_text(task: Task, include_solution: bool = True) -> str:
@@ -501,7 +508,7 @@ async def waiting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: TaskDatabase = context.application.bot_data["db"]
     user_id = update.effective_user.id
     if is_manager(user_id, settings):
-        statuses = tuple(status for status in STATUS_BY_KEY.values() if status != STATUS_DONE)
+        statuses = MANAGER_PENDING_STATUSES
         await show_status_picker(update, db, statuses, "Ждут решения", "manager_waiting")
         return
     await show_status_picker(update, db, MANAGER_PENDING_STATUSES, "Ждут руководителя", "assistant_waiting")
@@ -526,8 +533,9 @@ async def show_status_picker(
     source: str,
 ) -> None:
     rows = []
+    include_closed = source == "summary"
     for status in statuses:
-        tasks = db.list_tasks((status,))
+        tasks = tasks_for_status(db, status, include_closed=include_closed)
         if tasks:
             rows.append([
                 InlineKeyboardButton(
@@ -555,8 +563,9 @@ async def edit_status_picker(
     source: str,
 ) -> None:
     rows = []
+    include_closed = source == "summary"
     for status in statuses:
-        tasks = db.list_tasks((status,))
+        tasks = tasks_for_status(db, status, include_closed=include_closed)
         if tasks:
             rows.append([
                 InlineKeyboardButton(
@@ -892,7 +901,7 @@ async def handle_back_button(
     target = parts[1] if len(parts) > 1 else "menu"
 
     if target == "manager_waiting":
-        statuses = tuple(status for status in STATUS_BY_KEY.values() if status != STATUS_DONE)
+        statuses = MANAGER_PENDING_STATUSES
         await edit_status_picker(query, db, statuses, "Ждут решения", "manager_waiting")
         return
     if target == "assistant_waiting":
@@ -921,7 +930,7 @@ async def handle_summary_status_button(
     db: TaskDatabase = context.application.bot_data["db"]
     source = parts[1] if len(parts) > 2 else "summary"
     status = ":".join(parts[2:]) if len(parts) > 2 else ":".join(parts[1:])
-    tasks = db.list_tasks((status,))
+    tasks = tasks_for_status(db, status, include_closed=source == "summary")
 
     if not tasks:
         await update.callback_query.edit_message_text(f"В статусе «{status}» задач нет.")
@@ -1186,6 +1195,12 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await context.bot.send_message(
             chat_id=task.assistant_id,
             text=f"Руководитель дал обратную связь по задаче #{task.id}:\n\n{task_text(task)}",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("Изменить статус", callback_data=f"change_status:{task.id}")],
+                    [InlineKeyboardButton("Сдать результат", callback_data=f"pick_submit:{task.id}")],
+                ]
+            ),
         )
         return
 

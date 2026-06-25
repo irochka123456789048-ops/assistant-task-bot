@@ -181,6 +181,11 @@ class TaskDatabase:
                 ).fetchall()
         return [self._task_from_row(row) for row in rows]
 
+    def list_all_tasks(self) -> list[Task]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
+        return [self._task_from_row(row) for row in rows]
+
     def update_status(
         self,
         task_id: int,
