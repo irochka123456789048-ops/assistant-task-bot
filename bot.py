@@ -66,13 +66,14 @@ STATUS_BY_KEY = {
 MENU_NEW_TASK = "Создать задачу"
 MENU_LIST = "Список задач"
 MENU_WAITING = "Ждут руководителя"
-MENU_MANAGER_WAITING = "Ждут ответа/решения"
+MENU_MANAGER_WAITING = "Ждут решения"
 MENU_SUMMARY = "Сводка"
 MENU_MANAGER_SUMMARY = "Сводка по задачам"
 MENU_SUBMIT = "Сдать результат"
 MENU_DONE_TASKS = "Выполненные задачи"
 MENU_WHOAMI = "Мой Telegram ID"
 MENU_CANCEL = "Отмена"
+BACK_BUTTON = "⬅️ Назад"
 
 STATUS_LABELS = {
     STATUS_DONE: "🟢 Выполнено",
@@ -501,15 +502,15 @@ async def waiting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_manager(user_id, settings):
         statuses = tuple(status for status in STATUS_BY_KEY.values() if status != STATUS_DONE)
-        await show_status_picker(update, db, statuses, "Ждут ответа/решения")
+        await show_status_picker(update, db, statuses, "Ждут решения", "manager_waiting")
         return
-    await show_status_picker(update, db, MANAGER_PENDING_STATUSES, "Ждут руководителя")
+    await show_status_picker(update, db, MANAGER_PENDING_STATUSES, "Ждут руководителя", "assistant_waiting")
 
 
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
-    await show_status_picker(update, db, tuple(STATUS_BY_KEY.values()), "Сводка по задачам")
+    await show_status_picker(update, db, tuple(STATUS_BY_KEY.values()), "Сводка по задачам", "summary")
 
 
 async def done_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -522,6 +523,7 @@ async def show_status_picker(
     db: TaskDatabase,
     statuses: tuple[str, ...],
     title: str,
+    source: str,
 ) -> None:
     rows = []
     for status in statuses:
@@ -530,7 +532,7 @@ async def show_status_picker(
             rows.append([
                 InlineKeyboardButton(
                     f"{status_label(status)}: {len(tasks)}",
-                    callback_data=f"summary_status:{status}",
+                    callback_data=f"summary_status:{source}:{status}",
                 )
             ])
 
@@ -538,7 +540,37 @@ async def show_status_picker(
         await update.message.reply_text(f"{title}: задач нет.")
         return
 
+    rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
     await update.message.reply_text(
+        f"{title}. Выберите статус:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def edit_status_picker(
+    query,
+    db: TaskDatabase,
+    statuses: tuple[str, ...],
+    title: str,
+    source: str,
+) -> None:
+    rows = []
+    for status in statuses:
+        tasks = db.list_tasks((status,))
+        if tasks:
+            rows.append([
+                InlineKeyboardButton(
+                    f"{status_label(status)}: {len(tasks)}",
+                    callback_data=f"summary_status:{source}:{status}",
+                )
+            ])
+
+    if not rows:
+        await query.edit_message_text(f"{title}: задач нет.")
+        return
+
+    rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
+    await query.edit_message_text(
         f"{title}. Выберите статус:",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -550,9 +582,10 @@ async def show_task_list(update: Update, tasks: list[Task], title: str) -> None:
         return
 
     rows = [
-        [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{task.id}")]
+        [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:menu:{task.id}")]
         for task in tasks[:40]
     ]
+    rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
     await update.message.reply_text(title, reply_markup=InlineKeyboardMarkup(rows))
 
 
@@ -798,6 +831,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await handle_pick_submit_button(update, context, settings, parts)
         return
 
+    if action_group == "back":
+        await handle_back_button(update, context, settings, parts)
+        return
+
     if action_group == "summary_status":
         await handle_summary_status_button(update, context, parts)
         return
@@ -844,13 +881,46 @@ async def handle_pick_submit_button(
     )
 
 
+async def handle_back_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: Settings,
+    parts: list[str],
+) -> None:
+    query = update.callback_query
+    db: TaskDatabase = context.application.bot_data["db"]
+    target = parts[1] if len(parts) > 1 else "menu"
+
+    if target == "manager_waiting":
+        statuses = tuple(status for status in STATUS_BY_KEY.values() if status != STATUS_DONE)
+        await edit_status_picker(query, db, statuses, "Ждут решения", "manager_waiting")
+        return
+    if target == "assistant_waiting":
+        await edit_status_picker(query, db, MANAGER_PENDING_STATUSES, "Ждут руководителя", "assistant_waiting")
+        return
+    if target == "summary":
+        await edit_status_picker(query, db, tuple(STATUS_BY_KEY.values()), "Сводка по задачам", "summary")
+        return
+
+    context.user_data.clear()
+    await query.edit_message_text(
+        "Вернулись в главное меню. Используйте кнопки внизу экрана.",
+    )
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="Главное меню",
+        reply_markup=main_menu(query.from_user.id, settings),
+    )
+
+
 async def handle_summary_status_button(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     parts: list[str],
 ) -> None:
     db: TaskDatabase = context.application.bot_data["db"]
-    status = ":".join(parts[1:])
+    source = parts[1] if len(parts) > 2 else "summary"
+    status = ":".join(parts[2:]) if len(parts) > 2 else ":".join(parts[1:])
     tasks = db.list_tasks((status,))
 
     if not tasks:
@@ -858,9 +928,10 @@ async def handle_summary_status_button(
         return
 
     rows = [
-        [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{task.id}")]
+        [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{source}:{task.id}")]
         for task in tasks[:30]
     ]
+    rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data=f"back:{source}")])
     await update.callback_query.edit_message_text(
         f"Задачи в статусе «{status}»:",
         reply_markup=InlineKeyboardMarkup(rows),
@@ -875,7 +946,12 @@ async def handle_task_card_button(
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
     user_id = update.callback_query.from_user.id
-    task_id = int(parts[1])
+    if len(parts) >= 3:
+        source = parts[1]
+        task_id = int(parts[2])
+    else:
+        source = "menu"
+        task_id = int(parts[1])
 
     try:
         task = db.get_task(task_id)
@@ -891,6 +967,7 @@ async def handle_task_card_button(
         ])
     if is_manager(user_id, settings) and task.status != STATUS_DONE:
         rows.append([InlineKeyboardButton("Дать решение/комментарий", callback_data=f"manager_decision:comment:{task.id}")])
+    rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data=f"back:{source}")])
     await update.callback_query.edit_message_text(
         task_text(task),
         reply_markup=InlineKeyboardMarkup(rows) if rows else None,
@@ -1128,6 +1205,7 @@ async def show_submit_task_picker(update: Update, context: ContextTypes.DEFAULT_
     rows = []
     for task in tasks[:20]:
         rows.append([InlineKeyboardButton(f"#{task.id} {task.title[:40]}", callback_data=f"pick_submit:{task.id}")])
+    rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
 
     await update.message.reply_text(
         "Выберите задачу, по которой хотите сдать результат:",
@@ -1163,7 +1241,7 @@ async def remind_managers(context: ContextTypes.DEFAULT_TYPE) -> None:
 
             sent_any = True
             rows = [
-                [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:{task.id}")]
+                [InlineKeyboardButton(short_task_button(task), callback_data=f"task_card:manager_waiting:{task.id}")]
                 for task in tasks[:30]
             ]
             await context.bot.send_message(
