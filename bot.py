@@ -1102,6 +1102,21 @@ async def handle_manager_decision_button(
         "postponed": STATUS_POSTPONED,
     }
     status = status_by_decision[decision]
+
+    if decision == "done":
+        try:
+            task = db.update_status(task_id, STATUS_DONE, manager_feedback="Принято")
+        except KeyError:
+            await query.edit_message_text("Такой задачи нет.")
+            return
+
+        await query.edit_message_text(f"Задача переведена в выполненные:\n\n{task_text(task)}")
+        await context.bot.send_message(
+            chat_id=task.assistant_id,
+            text=f"Руководитель принял задачу #{task.id}. Задача выполнена.\n\n{task_text(task)}",
+        )
+        return
+
     pending = context.application.bot_data.setdefault("pending_manager_feedback", {})
     pending[query.from_user.id] = (task_id, status)
 
@@ -1229,8 +1244,9 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     pending_manager = context.application.bot_data.setdefault("pending_manager_feedback", {})
     if user_id in pending_manager:
         task_id, status = pending_manager.pop(user_id)
+        feedback = "" if text == "-" else text
         try:
-            task = db.update_status(task_id, status, manager_feedback=text)
+            task = db.update_status(task_id, status, manager_feedback=feedback)
         except KeyError:
             await update.message.reply_text("Такой задачи нет.")
             return
@@ -1384,6 +1400,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
