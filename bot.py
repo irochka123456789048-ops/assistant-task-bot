@@ -832,6 +832,33 @@ async def send_result_to_manager(context: ContextTypes.DEFAULT_TYPE, manager_id:
     )
 
 
+
+async def send_saved_solution(context: ContextTypes.DEFAULT_TYPE, chat_id: int, task: Task) -> None:
+    caption = f"Результат по задаче #{task.id}:\n\n{task.solution_text or task.title}"
+
+    if task.solution_file_id and task.solution_file_type == "document":
+        await context.bot.send_document(chat_id=chat_id, document=task.solution_file_id, caption=caption)
+        return
+
+    if task.solution_file_id and task.solution_file_type == "photo":
+        await context.bot.send_photo(chat_id=chat_id, photo=task.solution_file_id, caption=caption)
+        return
+
+    if task.solution_file_id and task.solution_file_type == "voice":
+        await context.bot.send_message(chat_id=chat_id, text=caption)
+        await context.bot.send_voice(chat_id=chat_id, voice=task.solution_file_id)
+        return
+
+    if task.solution_file_id and task.solution_file_type == "audio":
+        await context.bot.send_audio(chat_id=chat_id, audio=task.solution_file_id, caption=caption)
+        return
+
+    if task.solution_text:
+        await context.bot.send_message(chat_id=chat_id, text=caption)
+        return
+
+    await context.bot.send_message(chat_id=chat_id, text="По этой задаче результат пока не прикреплён.")
+
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     query = update.callback_query
@@ -854,6 +881,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if action_group == "task_card":
         await handle_task_card_button(update, context, parts)
+        return
+
+    if action_group == "show_solution":
+        await handle_show_solution_button(update, context, parts)
         return
 
     if action_group == "change_status":
@@ -973,6 +1004,8 @@ async def handle_task_card_button(
         return
 
     rows = []
+    if task.solution_text or task.solution_file_id:
+        rows.append([InlineKeyboardButton("Показать результат", callback_data=f"show_solution:{task.id}")])
     if is_assistant(user_id, settings):
         rows.extend([
             [InlineKeyboardButton("РЎРґР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚ РїРѕ СЌС‚РѕР№ Р·Р°РґР°С‡Рµ", callback_data=f"pick_submit:{task.id}")],
@@ -986,6 +1019,23 @@ async def handle_task_card_button(
         reply_markup=InlineKeyboardMarkup(rows) if rows else None,
     )
 
+
+async def handle_show_solution_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+) -> None:
+    db: TaskDatabase = context.application.bot_data["db"]
+    query = update.callback_query
+    task_id = int(parts[1])
+
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        await query.edit_message_text("Такой задачи нет.")
+        return
+
+    await send_saved_solution(context, query.message.chat_id, task)
 
 async def handle_change_status_button(
     update: Update,
@@ -1334,6 +1384,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
