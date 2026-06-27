@@ -63,17 +63,17 @@ STATUS_BY_KEY = {
     "done": STATUS_DONE,
 }
 
-MENU_NEW_TASK = "РЎРѕР·РґР°С‚СЊ Р·Р°РґР°С‡Сѓ"
-MENU_LIST = "РЎРїРёСЃРѕРє Р·Р°РґР°С‡"
-MENU_WAITING = "Р–РґСѓС‚ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ"
-MENU_MANAGER_WAITING = "Р–РґСѓС‚ СЂРµС€РµРЅРёСЏ"
-MENU_SUMMARY = "РЎРІРѕРґРєР°"
-MENU_MANAGER_SUMMARY = "РЎРІРѕРґРєР° РїРѕ Р·Р°РґР°С‡Р°Рј"
-MENU_SUBMIT = "РЎРґР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚"
-MENU_DONE_TASKS = "Р’С‹РїРѕР»РЅРµРЅРЅС‹Рµ Р·Р°РґР°С‡Рё"
-MENU_WHOAMI = "РњРѕР№ Telegram ID"
-MENU_CANCEL = "РћС‚РјРµРЅР°"
-BACK_BUTTON = "в¬…пёЏ РќР°Р·Р°Рґ"
+MENU_NEW_TASK = "Создать задачу"
+MENU_LIST = "Список задач"
+MENU_WAITING = "Ждут руководителя"
+MENU_MANAGER_WAITING = "Ждут решения"
+MENU_SUMMARY = "Сводка"
+MENU_MANAGER_SUMMARY = "Сводка по задачам"
+MENU_SUBMIT = "Сдать результат"
+MENU_DONE_TASKS = "Выполненные задачи"
+MENU_WHOAMI = "Мой Telegram ID"
+MENU_CANCEL = "Отмена"
+BACK_BUTTON = "⬅️ Назад"
 
 STATUS_LABELS = {
     STATUS_DONE: "🟢 Выполнено",
@@ -145,7 +145,7 @@ def status_label(status: str) -> str:
 
 def format_datetime(value: str | None) -> str:
     if not value:
-        return "РЅРµ СѓРєР°Р·Р°РЅРѕ"
+        return "не указано"
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError:
@@ -167,28 +167,28 @@ def tasks_for_status(db: TaskDatabase, status: str, include_closed: bool = False
 def task_text(task: Task, include_solution: bool = True) -> str:
     lines = [
         f"#{task.id} {task.title}",
-        f"РЎС‚Р°С‚СѓСЃ: {status_label(task.status)}",
-        f"РџРѕСЃС‚СѓРїРёР»Р°: {format_datetime(task.created_at)}",
-        f"РЎС‚Р°С‚СѓСЃ РёР·РјРµРЅС‘РЅ: {format_datetime(task.status_changed_at or task.created_at)}",
+        f"Статус: {status_label(task.status)}",
+        f"Поступила: {format_datetime(task.created_at)}",
+        f"Статус изменён: {format_datetime(task.status_changed_at or task.created_at)}",
     ]
 
     if task.deadline:
-        lines.insert(1, f"Р”РµРґР»Р°Р№РЅ: {task.deadline}")
+        lines.insert(1, f"Дедлайн: {task.deadline}")
 
     if task.comment:
-        lines.append(f"Р—Р°РґР°С‡Р° РѕС‚ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ: {task.comment}")
+        lines.append(f"Задача от руководителя: {task.comment}")
     if task.assistant_comment:
-        lines.append(f"РљРѕРјРјРµРЅС‚Р°СЂРёР№ Р°СЃСЃРёСЃС‚РµРЅС‚Р°: {task.assistant_comment}")
+        lines.append(f"Комментарий ассистента: {task.assistant_comment}")
     if task.manager_feedback:
-        lines.append(f"РљРѕРјРјРµРЅС‚Р°СЂРёР№ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ: {task.manager_feedback}")
+        lines.append(f"Комментарий руководителя: {task.manager_feedback}")
     if include_solution and task.solution_text:
-        lines.append(f"Р РµР·СѓР»СЊС‚Р°С‚: {task.solution_text}")
+        lines.append(f"Результат: {task.solution_text}")
     if include_solution and task.solution_file_name:
-        lines.append(f"Р¤Р°Р№Р» СЂРµР·СѓР»СЊС‚Р°С‚Р°: {task.solution_file_name}")
+        lines.append(f"Файл результата: {task.solution_file_name}")
     if task.submitted_at:
-        lines.append(f"РЎРґР°РЅР° Р°СЃСЃРёСЃС‚РµРЅС‚РѕРј: {format_datetime(task.submitted_at)}")
+        lines.append(f"Сдана ассистентом: {format_datetime(task.submitted_at)}")
     if task.status == STATUS_DONE:
-        lines.append(f"РџРµСЂРµС€Р»Р° РІ РІС‹РїРѕР»РЅРµРЅРЅРѕРµ: {format_datetime(task.status_changed_at or task.submitted_at)}")
+        lines.append(f"Перешла в выполненное: {format_datetime(task.status_changed_at or task.submitted_at)}")
 
     return "\n".join(lines)
 
@@ -236,7 +236,7 @@ def manager_decision_keyboard(task_id: int) -> InlineKeyboardMarkup:
 
 def manager_feedback_keyboard(task_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Р”Р°С‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№", callback_data=f"manager_comment:{task_id}")]]
+        [[InlineKeyboardButton("Дать комментарий", callback_data=f"manager_comment:{task_id}")]]
     )
 
 
@@ -244,9 +244,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     user_id = update.effective_user.id
     await update.message.reply_text(
-        "Р—РґСЂР°РІСЃС‚РІСѓР№С‚Рµ! РЇ Р±РѕС‚ РґР»СЏ Р·Р°РґР°С‡ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ Рё Р°СЃСЃРёСЃС‚РµРЅС‚Р°.\n\n"
-        "РўРµРїРµСЂСЊ РјРѕР¶РЅРѕ РїРѕР»СЊР·РѕРІР°С‚СЊСЃСЏ РєРЅРѕРїРєР°РјРё РІРЅРёР·Сѓ СЌРєСЂР°РЅР°.\n"
-        "Р СѓРєРѕРІРѕРґРёС‚РµР»СЊ СЃРѕР·РґР°С‘С‚ Р·Р°РґР°С‡Сѓ РєРЅРѕРїРєРѕР№, Р°СЃСЃРёСЃС‚РµРЅС‚ РїРѕР»СѓС‡Р°РµС‚ РµС‘ Рё РІС‹Р±РёСЂР°РµС‚ СЃС‚Р°С‚СѓСЃ.",
+        "Здравствуйте! Я бот для задач руководителя и ассистента.\n\n"
+        "Теперь можно пользоваться кнопками внизу экрана.\n"
+        "Руководитель создаёт задачу кнопкой, ассистент получает её и выбирает статус.",
         reply_markup=main_menu(user_id, settings),
     )
 
@@ -254,7 +254,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     await update.message.reply_text(
-        f"Р’Р°С€ Telegram ID: {update.effective_user.id}",
+        f"Ваш Telegram ID: {update.effective_user.id}",
         reply_markup=main_menu(update.effective_user.id, settings),
     )
 
@@ -263,16 +263,16 @@ async def check_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     api_key = get_yandex_api_key()
     folder_id = os.getenv("YANDEX_FOLDER_ID", "").strip()
     if not api_key:
-        await update.message.reply_text("YANDEX_API_KEY РЅРµ РЅР°Р№РґРµРЅ РІ РїРµСЂРµРјРµРЅРЅС‹С… РѕРєСЂСѓР¶РµРЅРёСЏ Bothost.")
+        await update.message.reply_text("YANDEX_API_KEY не найден в переменных окружения Bothost.")
         return
 
-    masked_key = f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 12 else "РєР»СЋС‡ СЃР»РёС€РєРѕРј РєРѕСЂРѕС‚РєРёР№"
-    folder_text = folder_id or "РЅРµ СѓРєР°Р·Р°РЅ, Р±РѕС‚ РІРѕР·СЊРјРµС‚ РєР°С‚Р°Р»РѕРі РёР· API-РєР»СЋС‡Р°"
+    masked_key = f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 12 else "ключ слишком короткий"
+    folder_text = folder_id or "не указан, бот возьмет каталог из API-ключа"
     await update.message.reply_text(
-        "Yandex SpeechKit РЅР°СЃС‚СЂРѕРµРЅ.\n"
-        f"РњР°СЃРєР° РєР»СЋС‡Р°: {masked_key}\n\n"
+        "Yandex SpeechKit настроен.\n"
+        f"Маска ключа: {masked_key}\n\n"
         f"YANDEX_FOLDER_ID: {folder_text}\n\n"
-        "РўРµРїРµСЂСЊ РѕС‚РїСЂР°РІСЊС‚Рµ РіРѕР»РѕСЃРѕРІРѕРµ РІ РіСЂСѓРїРїСѓ. Р•СЃР»Рё Р±СѓРґРµС‚ РѕС€РёР±РєР°, Р±РѕС‚ РїРѕРєР°Р¶РµС‚ РєРѕСЂРѕС‚РєСѓСЋ РїСЂРёС‡РёРЅСѓ."
+        "Теперь отправьте голосовое в группу. Если будет ошибка, бот покажет короткую причину."
     )
 
 
@@ -306,22 +306,22 @@ async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT
     if message.from_user is None or not is_manager(message.from_user.id, settings):
         return
 
-    await message.reply_text("РЎР»СѓС€Р°СЋ РіРѕР»РѕСЃРѕРІРѕРµ Рё РїСЂРµРІСЂР°С‰Р°СЋ РµРіРѕ РІ Р·Р°РґР°С‡Сѓ...")
+    await message.reply_text("Слушаю голосовое и превращаю его в задачу...")
 
     try:
         transcript = await transcribe_telegram_voice(message)
     except Exception as error:
         logging.exception("Voice transcription failed")
         await message.reply_text(
-            "РќРµ РїРѕР»СѓС‡РёР»РѕСЃСЊ СЂР°СЃС€РёС„СЂРѕРІР°С‚СЊ РіРѕР»РѕСЃРѕРІРѕРµ.\n\n"
-            f"РљРѕСЂРѕС‚РєР°СЏ РїСЂРёС‡РёРЅР°: {safe_error_text(error)}\n\n"
-            "РџСЂРѕРІРµСЂСЊС‚Рµ YANDEX_API_KEY Рё Р±Р°Р»Р°РЅСЃ Yandex Cloud."
+            "Не получилось расшифровать голосовое.\n\n"
+            f"Короткая причина: {safe_error_text(error)}\n\n"
+            "Проверьте YANDEX_API_KEY и баланс Yandex Cloud."
         )
         return
 
     transcript = transcript.strip()
     if not transcript:
-        await message.reply_text("Р“РѕР»РѕСЃРѕРІРѕРµ СЂР°СЃРїРѕР·РЅР°РЅРѕ РїСѓСЃС‚С‹Рј. РџРѕРїСЂРѕР±СѓР№С‚Рµ Р·Р°РїРёСЃР°С‚СЊ РµС‰С‘ СЂР°Р·.")
+        await message.reply_text("Голосовое распознано пустым. Попробуйте записать ещё раз.")
         return
 
     await create_task_from_text(update, context, transcript, source_chat_id=message.chat_id)
@@ -354,7 +354,7 @@ def get_yandex_api_key() -> str:
 def transcribe_with_yandex(audio_path: Path) -> str:
     api_key = get_yandex_api_key()
     if not api_key:
-        raise RuntimeError("YANDEX_API_KEY РЅРµ РЅР°Р№РґРµРЅ")
+        raise RuntimeError("YANDEX_API_KEY не найден")
 
     audio_content = base64.b64encode(audio_path.read_bytes()).decode("ascii")
     headers = {"Authorization": f"Api-Key {api_key}"}
@@ -389,7 +389,7 @@ def transcribe_with_yandex(audio_path: Path) -> str:
     operation = response.json()
     operation_id = operation.get("id")
     if not operation_id:
-        raise RuntimeError("Yandex РЅРµ РІРµСЂРЅСѓР» operation id")
+        raise RuntimeError("Yandex не вернул operation id")
 
     wait_for_yandex_operation(operation_id, headers)
     recognition = requests.get(
@@ -417,12 +417,12 @@ def wait_for_yandex_operation(operation_id: str, headers: dict[str, str]) -> Non
         operation = response.json()
         if operation.get("done"):
             if "error" in operation:
-                message = operation["error"].get("message", "РѕС€РёР±РєР° СЂР°СЃРїРѕР·РЅР°РІР°РЅРёСЏ Yandex")
+                message = operation["error"].get("message", "ошибка распознавания Yandex")
                 raise RuntimeError(message)
             return
         time_module.sleep(poll_seconds)
 
-    raise RuntimeError("Yandex РЅРµ СѓСЃРїРµР» СЂР°СЃС€РёС„СЂРѕРІР°С‚СЊ РіРѕР»РѕСЃРѕРІРѕРµ Р·Р° РѕС‚РІРµРґРµРЅРЅРѕРµ РІСЂРµРјСЏ")
+    raise RuntimeError("Yandex не успел расшифровать голосовое за отведенное время")
 
 
 def extract_yandex_text(raw_text: str) -> str:
@@ -470,7 +470,7 @@ def transcribe_with_openai(audio_path: Path) -> str:
                 model="gpt-4o-mini-transcribe",
                 file=audio_file,
                 response_format="text",
-                prompt="Р­С‚Рѕ РіРѕР»РѕСЃРѕРІР°СЏ Р·Р°РґР°С‡Р° СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ РґР»СЏ Р°СЃСЃРёСЃС‚РµРЅС‚Р°. Р Р°СЃС€РёС„СЂСѓР№ РЅР° СЂСѓСЃСЃРєРѕРј СЏР·С‹РєРµ.",
+                prompt="Это голосовая задача руководителя для ассистента. Расшифруй на русском языке.",
             )
     except Exception:
         with audio_path.open("rb") as audio_file:
@@ -478,7 +478,7 @@ def transcribe_with_openai(audio_path: Path) -> str:
                 model="whisper-1",
                 file=audio_file,
                 response_format="text",
-                prompt="Р­С‚Рѕ РіРѕР»РѕСЃРѕРІР°СЏ Р·Р°РґР°С‡Р° СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ РґР»СЏ Р°СЃСЃРёСЃС‚РµРЅС‚Р°. Р Р°СЃС€РёС„СЂСѓР№ РЅР° СЂСѓСЃСЃРєРѕРј СЏР·С‹РєРµ.",
+                prompt="Это голосовая задача руководителя для ассистента. Расшифруй на русском языке.",
             )
     return str(transcription)
 
@@ -488,9 +488,9 @@ def safe_error_text(error: Exception) -> str:
     if not text:
         return error.__class__.__name__
     if "sk-" in text:
-        return "РѕС€РёР±РєР° OpenAI API, РєР»СЋС‡ СЃРєСЂС‹С‚"
+        return "ошибка OpenAI API, ключ скрыт"
     if "Api-Key" in text or "YANDEX_API_KEY" in text:
-        return text.replace(os.getenv("YANDEX_API_KEY", ""), "РєР»СЋС‡ СЃРєСЂС‹С‚")
+        return text.replace(os.getenv("YANDEX_API_KEY", ""), "ключ скрыт")
     return text[:300]
 
 
@@ -502,7 +502,7 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
     await update.message.reply_text(
-        format_task_list(db.list_tasks(), "РђРєС‚РёРІРЅС‹Рµ Р·Р°РґР°С‡Рё"),
+        format_task_list(db.list_tasks(), "Активные задачи"),
         reply_markup=main_menu(update.effective_user.id, settings),
     )
 
@@ -513,20 +513,20 @@ async def waiting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if is_manager(user_id, settings):
         statuses = MANAGER_PENDING_STATUSES
-        await show_status_picker(update, db, statuses, "Р–РґСѓС‚ СЂРµС€РµРЅРёСЏ", "manager_waiting")
+        await show_status_picker(update, db, statuses, "Ждут решения", "manager_waiting")
         return
-    await show_status_picker(update, db, MANAGER_PENDING_STATUSES, "Р–РґСѓС‚ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ", "assistant_waiting")
+    await show_status_picker(update, db, MANAGER_PENDING_STATUSES, "Ждут руководителя", "assistant_waiting")
 
 
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
-    await show_status_picker(update, db, tuple(STATUS_BY_KEY.values()), "РЎРІРѕРґРєР° РїРѕ Р·Р°РґР°С‡Р°Рј", "summary")
+    await show_status_picker(update, db, tuple(STATUS_BY_KEY.values()), "Сводка по задачам", "summary")
 
 
 async def done_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: TaskDatabase = context.application.bot_data["db"]
-    await show_task_list(update, db.list_tasks((STATUS_DONE,)), "Р’С‹РїРѕР»РЅРµРЅРЅС‹Рµ Р·Р°РґР°С‡Рё")
+    await show_task_list(update, db.list_tasks((STATUS_DONE,)), "Выполненные задачи")
 
 
 async def show_status_picker(
@@ -549,12 +549,12 @@ async def show_status_picker(
             ])
 
     if not rows:
-        await update.message.reply_text(f"{title}: Р·Р°РґР°С‡ РЅРµС‚.")
+        await update.message.reply_text(f"{title}: задач нет.")
         return
 
     rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
     await update.message.reply_text(
-        f"{title}. Р’С‹Р±РµСЂРёС‚Рµ СЃС‚Р°С‚СѓСЃ:",
+        f"{title}. Выберите статус:",
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
@@ -579,19 +579,19 @@ async def edit_status_picker(
             ])
 
     if not rows:
-        await query.edit_message_text(f"{title}: Р·Р°РґР°С‡ РЅРµС‚.")
+        await query.edit_message_text(f"{title}: задач нет.")
         return
 
     rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
     await query.edit_message_text(
-        f"{title}. Р’С‹Р±РµСЂРёС‚Рµ СЃС‚Р°С‚СѓСЃ:",
+        f"{title}. Выберите статус:",
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
 async def show_task_list(update: Update, tasks: list[Task], title: str) -> None:
     if not tasks:
-        await update.message.reply_text(f"{title}: Р·Р°РґР°С‡ РЅРµС‚.")
+        await update.message.reply_text(f"{title}: задач нет.")
         return
 
     rows = [
@@ -606,16 +606,16 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("РќР°РїРёС€РёС‚Рµ РЅРѕРјРµСЂ Р·Р°РґР°С‡Рё: /done 1")
+        await update.message.reply_text("Напишите номер задачи: /done 1")
         return
 
     try:
         task = db.update_status(int(context.args[0]), STATUS_DONE)
     except KeyError:
-        await update.message.reply_text("РўР°РєРѕР№ Р·Р°РґР°С‡Рё РЅРµС‚.")
+        await update.message.reply_text("Такой задачи нет.")
         return
     await update.message.reply_text(
-        f"Р“РѕС‚РѕРІРѕ:\n\n{task_text(task)}",
+        f"Готово:\n\n{task_text(task)}",
         reply_markup=main_menu(update.effective_user.id, settings),
     )
 
@@ -631,7 +631,7 @@ async def create_task_from_text(
     user_id = update.effective_user.id
 
     if not is_manager(user_id, settings) and not is_assistant(user_id, settings):
-        await update.message.reply_text("РЎРѕР·РґР°РІР°С‚СЊ Р·Р°РґР°С‡Рё РјРѕР¶РµС‚ С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚ РёР»Рё СЂСѓРєРѕРІРѕРґРёС‚РµР»СЊ.")
+        await update.message.reply_text("Создавать задачи может только ассистент или руководитель.")
         return
 
     created_by_role = "manager" if is_manager(user_id, settings) else "assistant"
@@ -639,19 +639,19 @@ async def create_task_from_text(
     manager_id = user_id if created_by_role == "manager" else pick_manager_id(settings)
 
     if assistant_id is None:
-        await update.message.reply_text("Р’ РЅР°СЃС‚СЂРѕР№РєР°С… РЅРµ СѓРєР°Р·Р°РЅ ASSISTANT_IDS.")
+        await update.message.reply_text("В настройках не указан ASSISTANT_IDS.")
         return
     if created_by_role == "assistant" and manager_id is None:
-        await update.message.reply_text("Р’ РЅР°СЃС‚СЂРѕР№РєР°С… РЅРµ СѓРєР°Р·Р°РЅ MANAGER_IDS.")
+        await update.message.reply_text("В настройках не указан MANAGER_IDS.")
         return
 
     title, deadline, comment = parse_task_input(text)
     if not title:
         await update.message.reply_text(
-            "РќР°РїРёС€РёС‚Рµ Р·Р°РґР°С‡Сѓ РѕР±С‹С‡РЅС‹Рј С‚РµРєСЃС‚РѕРј.\n\n"
-            "РќР°РїСЂРёРјРµСЂ:\nРџРѕРґРіРѕС‚РѕРІРёС‚СЊ РґРѕРіРѕРІРѕСЂ\n\n"
-            "Р•СЃР»Рё С…РѕС‚РёС‚Рµ, РјРѕР¶РЅРѕ РґРѕР±Р°РІРёС‚СЊ РґРµРґР»Р°Р№РЅ Рё РєРѕРјРјРµРЅС‚Р°СЂРёР№:\n"
-            "РџРѕРґРіРѕС‚РѕРІРёС‚СЊ РґРѕРіРѕРІРѕСЂ | Р·Р°РІС‚СЂР° 18:00 | РїСЂРѕРІРµСЂРёС‚СЊ СЃСѓРјРјСѓ",
+            "Напишите задачу обычным текстом.\n\n"
+            "Например:\nПодготовить договор\n\n"
+            "Если хотите, можно добавить дедлайн и комментарий:\n"
+            "Подготовить договор | завтра 18:00 | проверить сумму",
             reply_markup=cancel_menu(),
         )
         return
@@ -667,20 +667,20 @@ async def create_task_from_text(
     )
 
     if update.message.chat.type == "private":
-        created_text = "Р—Р°РґР°С‡Р° СЃРѕР·РґР°РЅР°."
+        created_text = "Задача создана."
         if created_by_role == "manager":
-            created_text = "Р—Р°РґР°С‡Р° СЃРѕР·РґР°РЅР° Рё РѕС‚РїСЂР°РІР»РµРЅР° Р°СЃСЃРёСЃС‚РµРЅС‚Сѓ."
+            created_text = "Задача создана и отправлена ассистенту."
         await update.message.reply_text(
             f"{created_text}\n\n{task_text(task)}",
             reply_markup=main_menu(user_id, settings),
         )
     else:
-        await update.message.reply_text(f"Р—Р°РґР°С‡Р° #{task.id} СЃРѕР·РґР°РЅР° Рё РѕС‚РїСЂР°РІР»РµРЅР° Р°СЃСЃРёСЃС‚РµРЅС‚Сѓ.")
+        await update.message.reply_text(f"Задача #{task.id} создана и отправлена ассистенту.")
 
     if created_by_role == "manager":
         await context.bot.send_message(
             chat_id=assistant_id,
-            text="РќРѕРІР°СЏ Р·Р°РґР°С‡Р° РѕС‚ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ. Р’С‹Р±РµСЂРёС‚Рµ СЃС‚Р°С‚СѓСЃ Рё Р·Р°С‚РµРј РЅР°РїРёС€РёС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№:\n\n"
+            text="Новая задача от руководителя. Выберите статус и затем напишите комментарий:\n\n"
             f"{task_text(task)}",
             reply_markup=assistant_status_keyboard(task.id),
         )
@@ -707,14 +707,14 @@ async def submit_task_from_message(update: Update, context: ContextTypes.DEFAULT
     user_id = update.effective_user.id
 
     if not is_assistant(user_id, settings):
-        await update.message.reply_text("РЎРґР°РІР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚ РјРѕР¶РµС‚ С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚.")
+        await update.message.reply_text("Сдавать результат может только ассистент.")
         return
 
     selected_task_id = context.user_data.get("submit_task_id")
     parsed = parse_submit_message(update.message, selected_task_id=selected_task_id)
     if parsed is None:
         await update.message.reply_text(
-            "РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРёС‚Рµ Р·Р°РґР°С‡Сѓ РёР· СЃРїРёСЃРєР°, Р·Р°С‚РµРј РѕС‚РїСЂР°РІСЊС‚Рµ СЂРµР·СѓР»СЊС‚Р°С‚ С‚РµРєСЃС‚РѕРј, С„РѕС‚Рѕ РёР»Рё С„Р°Р№Р»РѕРј.",
+            "Сначала выберите задачу из списка, затем отправьте результат текстом, фото или файлом.",
             reply_markup=cancel_menu(),
         )
         return
@@ -735,13 +735,13 @@ async def submit_task_from_message(update: Update, context: ContextTypes.DEFAULT
             solution_file_type=file_type,
         )
     except KeyError:
-        await update.message.reply_text("РўР°РєРѕР№ Р·Р°РґР°С‡Рё РЅРµС‚ РёР»Рё Сѓ РЅРµС‘ РЅРµ СѓРєР°Р·Р°РЅ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЊ.")
+        await update.message.reply_text("Такой задачи нет или у неё не указан руководитель.")
         return
 
     await send_result_to_manager(context, manager_id, task)
     context.user_data.pop("submit_task_id", None)
     await update.message.reply_text(
-        f"Р РµР·СѓР»СЊС‚Р°С‚ РѕС‚РїСЂР°РІР»РµРЅ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЋ:\n\n{task_text(task)}",
+        f"Результат отправлен руководителю:\n\n{task_text(task)}",
         reply_markup=main_menu(user_id, settings),
     )
 
@@ -787,7 +787,7 @@ def parse_submit_message(message: Message, selected_task_id: int | None = None) 
 
 
 async def send_result_to_manager(context: ContextTypes.DEFAULT_TYPE, manager_id: int, task: Task) -> None:
-    text = "РђСЃСЃРёСЃС‚РµРЅС‚ СЃРґР°Р» СЂРµР·СѓР»СЊС‚Р°С‚. Р’С‹Р±РµСЂРёС‚Рµ СЂРµС€РµРЅРёРµ:\n\n" f"{task_text(task)}"
+    text = "Ассистент сдал результат. Выберите решение:\n\n" f"{task_text(task)}"
 
     if task.solution_file_id and task.solution_file_type == "document":
         await context.bot.send_document(
@@ -912,16 +912,16 @@ async def handle_pick_submit_button(
 ) -> None:
     query = update.callback_query
     if not is_assistant(query.from_user.id, settings):
-        await query.edit_message_text("Р’С‹Р±РёСЂР°С‚СЊ Р·Р°РґР°С‡Сѓ РґР»СЏ СЃРґР°С‡Рё РјРѕР¶РµС‚ С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚.")
+        await query.edit_message_text("Выбирать задачу для сдачи может только ассистент.")
         return
 
     task_id = int(parts[1])
     context.user_data["state"] = "submit_result"
     context.user_data["submit_task_id"] = task_id
     await query.edit_message_text(
-        f"Р’С‹Р±СЂР°РЅР° Р·Р°РґР°С‡Р° #{task_id}.\n\n"
-        "РўРµРїРµСЂСЊ РѕС‚РїСЂР°РІСЊС‚Рµ СЂРµР·СѓР»СЊС‚Р°С‚ С‚РµРєСЃС‚РѕРј, С„РѕС‚Рѕ РёР»Рё С„Р°Р№Р»РѕРј.\n"
-        "Р•СЃР»Рё РѕС‚РїСЂР°РІР»СЏРµС‚Рµ С„Р°Р№Р» РёР»Рё С„РѕС‚Рѕ, РґРѕР±Р°РІСЊС‚Рµ РїРѕРґРїРёСЃСЊ СЃ РєРѕРјРјРµРЅС‚Р°СЂРёРµРј."
+        f"Выбрана задача #{task_id}.\n\n"
+        "Теперь отправьте результат текстом, фото или файлом.\n"
+        "Если отправляете файл или фото, добавьте подпись с комментарием."
     )
 
 
@@ -937,22 +937,22 @@ async def handle_back_button(
 
     if target == "manager_waiting":
         statuses = MANAGER_PENDING_STATUSES
-        await edit_status_picker(query, db, statuses, "Р–РґСѓС‚ СЂРµС€РµРЅРёСЏ", "manager_waiting")
+        await edit_status_picker(query, db, statuses, "Ждут решения", "manager_waiting")
         return
     if target == "assistant_waiting":
-        await edit_status_picker(query, db, MANAGER_PENDING_STATUSES, "Р–РґСѓС‚ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЏ", "assistant_waiting")
+        await edit_status_picker(query, db, MANAGER_PENDING_STATUSES, "Ждут руководителя", "assistant_waiting")
         return
     if target == "summary":
-        await edit_status_picker(query, db, tuple(STATUS_BY_KEY.values()), "РЎРІРѕРґРєР° РїРѕ Р·Р°РґР°С‡Р°Рј", "summary")
+        await edit_status_picker(query, db, tuple(STATUS_BY_KEY.values()), "Сводка по задачам", "summary")
         return
 
     context.user_data.clear()
     await query.edit_message_text(
-        "Р’РµСЂРЅСѓР»РёСЃСЊ РІ РіР»Р°РІРЅРѕРµ РјРµРЅСЋ. РСЃРїРѕР»СЊР·СѓР№С‚Рµ РєРЅРѕРїРєРё РІРЅРёР·Сѓ СЌРєСЂР°РЅР°.",
+        "Вернулись в главное меню. Используйте кнопки внизу экрана.",
     )
     await context.bot.send_message(
         chat_id=query.message.chat_id,
-        text="Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ",
+        text="Главное меню",
         reply_markup=main_menu(query.from_user.id, settings),
     )
 
@@ -968,7 +968,7 @@ async def handle_summary_status_button(
     tasks = tasks_for_status(db, status, include_closed=source == "summary")
 
     if not tasks:
-        await update.callback_query.edit_message_text(f"Р’ СЃС‚Р°С‚СѓСЃРµ В«{status}В» Р·Р°РґР°С‡ РЅРµС‚.")
+        await update.callback_query.edit_message_text(f"В статусе «{status}» задач нет.")
         return
 
     rows = [
@@ -977,7 +977,7 @@ async def handle_summary_status_button(
     ]
     rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data=f"back:{source}")])
     await update.callback_query.edit_message_text(
-        f"Р—Р°РґР°С‡Рё РІ СЃС‚Р°С‚СѓСЃРµ В«{status}В»:",
+        f"Задачи в статусе «{status}»:",
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
@@ -1000,7 +1000,7 @@ async def handle_task_card_button(
     try:
         task = db.get_task(task_id)
     except KeyError:
-        await update.callback_query.edit_message_text("РўР°РєРѕР№ Р·Р°РґР°С‡Рё РЅРµС‚.")
+        await update.callback_query.edit_message_text("Такой задачи нет.")
         return
 
     rows = []
@@ -1008,11 +1008,11 @@ async def handle_task_card_button(
         rows.append([InlineKeyboardButton("Показать результат", callback_data=f"show_solution:{task.id}")])
     if is_assistant(user_id, settings):
         rows.extend([
-            [InlineKeyboardButton("РЎРґР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚ РїРѕ СЌС‚РѕР№ Р·Р°РґР°С‡Рµ", callback_data=f"pick_submit:{task.id}")],
-            [InlineKeyboardButton("РР·РјРµРЅРёС‚СЊ СЃС‚Р°С‚СѓСЃ", callback_data=f"change_status:{task.id}")],
+            [InlineKeyboardButton("Сдать результат по этой задаче", callback_data=f"pick_submit:{task.id}")],
+            [InlineKeyboardButton("Изменить статус", callback_data=f"change_status:{task.id}")],
         ])
     if is_manager(user_id, settings) and task.status != STATUS_DONE:
-        rows.append([InlineKeyboardButton("Р”Р°С‚СЊ СЂРµС€РµРЅРёРµ/РєРѕРјРјРµРЅС‚Р°СЂРёР№", callback_data=f"manager_decision:comment:{task.id}")])
+        rows.append([InlineKeyboardButton("Дать решение/комментарий", callback_data=f"manager_decision:comment:{task.id}")])
     rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data=f"back:{source}")])
     await update.callback_query.edit_message_text(
         task_text(task),
@@ -1045,12 +1045,12 @@ async def handle_change_status_button(
 ) -> None:
     query = update.callback_query
     if not is_assistant(query.from_user.id, settings):
-        await query.edit_message_text("РњРµРЅСЏС‚СЊ СЃС‚Р°С‚СѓСЃ РјРѕР¶РµС‚ С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚.")
+        await query.edit_message_text("Менять статус может только ассистент.")
         return
 
     task_id = int(parts[1])
     await query.edit_message_text(
-        f"Р’С‹Р±РµСЂРёС‚Рµ РЅРѕРІС‹Р№ СЃС‚Р°С‚СѓСЃ РґР»СЏ Р·Р°РґР°С‡Рё #{task_id}:",
+        f"Выберите новый статус для задачи #{task_id}:",
         reply_markup=assistant_status_keyboard(task_id),
     )
 
@@ -1062,7 +1062,7 @@ async def handle_assistant_status_button(
     parts: list[str],
 ) -> None:
     if not is_assistant(update.callback_query.from_user.id, settings):
-        await update.callback_query.edit_message_text("Р­С‚Рё РєРЅРѕРїРєРё РґРѕСЃС‚СѓРїРЅС‹ С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚Сѓ.")
+        await update.callback_query.edit_message_text("Эти кнопки доступны только ассистенту.")
         return
 
     _, status_key, task_id_text = parts
@@ -1072,9 +1072,9 @@ async def handle_assistant_status_button(
     pending[update.callback_query.from_user.id] = (task_id, status)
 
     await update.callback_query.edit_message_text(
-        f"Р’С‹ РІС‹Р±СЂР°Р»Рё СЃС‚Р°С‚СѓСЃ: {status}\n\n"
-        "РўРµРїРµСЂСЊ РЅР°РїРёС€РёС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№ Рє СЂСѓРєРѕРІРѕРґРёС‚РµР»СЋ РѕРґРЅРёРј СЃРѕРѕР±С‰РµРЅРёРµРј.\n"
-        "Р•СЃР»Рё РєРѕРјРјРµРЅС‚Р°СЂРёР№ РЅРµ РЅСѓР¶РµРЅ, РЅР°РїРёС€РёС‚Рµ: -"
+        f"Вы выбрали статус: {status}\n\n"
+        "Теперь напишите комментарий к руководителю одним сообщением.\n"
+        "Если комментарий не нужен, напишите: -"
     )
 
 
@@ -1088,7 +1088,7 @@ async def handle_manager_decision_button(
     query = update.callback_query
 
     if not is_manager(query.from_user.id, settings):
-        await query.edit_message_text("Р­С‚Рё РєРЅРѕРїРєРё РґРѕСЃС‚СѓРїРЅС‹ С‚РѕР»СЊРєРѕ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЋ.")
+        await query.edit_message_text("Эти кнопки доступны только руководителю.")
         return
 
     _, decision, task_id_text = parts
@@ -1121,20 +1121,20 @@ async def handle_manager_comment_button(
     db: TaskDatabase = context.application.bot_data["db"]
 
     if not is_manager(query.from_user.id, settings):
-        await query.edit_message_text("РљРѕРјРјРµРЅС‚РёСЂРѕРІР°С‚СЊ Р·Р°РґР°С‡Сѓ РјРѕР¶РµС‚ С‚РѕР»СЊРєРѕ СЂСѓРєРѕРІРѕРґРёС‚РµР»СЊ.")
+        await query.edit_message_text("Комментировать задачу может только руководитель.")
         return
 
     task_id = int(parts[1])
     try:
         task = db.get_task(task_id)
     except KeyError:
-        await query.edit_message_text("РўР°РєРѕР№ Р·Р°РґР°С‡Рё РЅРµС‚.")
+        await query.edit_message_text("Такой задачи нет.")
         return
 
     pending = context.application.bot_data.setdefault("pending_manager_feedback", {})
     pending[query.from_user.id] = (task_id, task.status)
     await query.edit_message_text(
-        f"РќР°РїРёС€РёС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№ РґР»СЏ Р°СЃСЃРёСЃС‚РµРЅС‚Р° РїРѕ Р·Р°РґР°С‡Рµ #{task_id}:\n\n{task_text(task)}"
+        f"Напишите комментарий для ассистента по задаче #{task_id}:\n\n{task_text(task)}"
     )
 
 
@@ -1147,7 +1147,7 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if text == MENU_CANCEL:
         context.user_data.clear()
         await update.message.reply_text(
-            "Р”РµР№СЃС‚РІРёРµ РѕС‚РјРµРЅРµРЅРѕ.",
+            "Действие отменено.",
             reply_markup=main_menu(user_id, settings),
         )
         return
@@ -1165,21 +1165,21 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if text == MENU_NEW_TASK:
         if not is_manager(user_id, settings) and not is_assistant(user_id, settings):
-            await update.message.reply_text("Р­С‚Р° РєРЅРѕРїРєР° РґРѕСЃС‚СѓРїРЅР° С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚Сѓ РёР»Рё СЂСѓРєРѕРІРѕРґРёС‚РµР»СЋ.")
+            await update.message.reply_text("Эта кнопка доступна только ассистенту или руководителю.")
             return
         context.user_data["state"] = "create_task"
         await update.message.reply_text(
-            "РќР°РїРёС€РёС‚Рµ Р·Р°РґР°С‡Сѓ РѕР±С‹С‡РЅС‹Рј С‚РµРєСЃС‚РѕРј.\n\n"
-            "РџСЂРёРјРµСЂ:\nРџРѕРґРіРѕС‚РѕРІРёС‚СЊ РґРѕРіРѕРІРѕСЂ\n\n"
-            "Р•СЃР»Рё РЅСѓР¶РµРЅ РґРµРґР»Р°Р№РЅ РёР»Рё РєРѕРјРјРµРЅС‚Р°СЂРёР№, РјРѕР¶РЅРѕ С‚Р°Рє:\n"
-            "РџРѕРґРіРѕС‚РѕРІРёС‚СЊ РґРѕРіРѕРІРѕСЂ | Р·Р°РІС‚СЂР° 18:00 | РїСЂРѕРІРµСЂРёС‚СЊ СЃСѓРјРјСѓ",
+            "Напишите задачу обычным текстом.\n\n"
+            "Пример:\nПодготовить договор\n\n"
+            "Если нужен дедлайн или комментарий, можно так:\n"
+            "Подготовить договор | завтра 18:00 | проверить сумму",
             reply_markup=cancel_menu(),
         )
         return
 
     if text == MENU_SUBMIT:
         if not is_assistant(user_id, settings):
-            await update.message.reply_text("Р­С‚Р° РєРЅРѕРїРєР° РґРѕСЃС‚СѓРїРЅР° С‚РѕР»СЊРєРѕ Р°СЃСЃРёСЃС‚РµРЅС‚Сѓ.")
+            await update.message.reply_text("Эта кнопка доступна только ассистенту.")
             return
         await show_submit_task_picker(update, context)
         return
@@ -1211,17 +1211,17 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             task = db.update_status(task_id, status, assistant_comment=comment)
         except KeyError:
-            await update.message.reply_text("РўР°РєРѕР№ Р·Р°РґР°С‡Рё РЅРµС‚.")
+            await update.message.reply_text("Такой задачи нет.")
             return
 
         await update.message.reply_text(
-            f"РЎС‚Р°С‚СѓСЃ СЃРѕС…СЂР°РЅС‘РЅ:\n\n{task_text(task)}",
+            f"Статус сохранён:\n\n{task_text(task)}",
             reply_markup=main_menu(user_id, settings),
         )
         if task.manager_id:
             await context.bot.send_message(
                 chat_id=task.manager_id,
-                text=f"РђСЃСЃРёСЃС‚РµРЅС‚ РѕР±РЅРѕРІРёР» СЃС‚Р°С‚СѓСЃ Р·Р°РґР°С‡Рё #{task.id}:\n\n{task_text(task)}",
+                text=f"Ассистент обновил статус задачи #{task.id}:\n\n{task_text(task)}",
                 reply_markup=manager_feedback_keyboard(task.id),
             )
         return
@@ -1232,27 +1232,27 @@ async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             task = db.update_status(task_id, status, manager_feedback=text)
         except KeyError:
-            await update.message.reply_text("РўР°РєРѕР№ Р·Р°РґР°С‡Рё РЅРµС‚.")
+            await update.message.reply_text("Такой задачи нет.")
             return
 
         await update.message.reply_text(
-            f"РљРѕРјРјРµРЅС‚Р°СЂРёР№ РѕС‚РїСЂР°РІР»РµРЅ Р°СЃСЃРёСЃС‚РµРЅС‚Сѓ:\n\n{task_text(task)}",
+            f"Комментарий отправлен ассистенту:\n\n{task_text(task)}",
             reply_markup=main_menu(user_id, settings),
         )
         await context.bot.send_message(
             chat_id=task.assistant_id,
-            text=f"Р СѓРєРѕРІРѕРґРёС‚РµР»СЊ РґР°Р» РѕР±СЂР°С‚РЅСѓСЋ СЃРІСЏР·СЊ РїРѕ Р·Р°РґР°С‡Рµ #{task.id}:\n\n{task_text(task)}",
+            text=f"Руководитель дал обратную связь по задаче #{task.id}:\n\n{task_text(task)}",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("РР·РјРµРЅРёС‚СЊ СЃС‚Р°С‚СѓСЃ", callback_data=f"change_status:{task.id}")],
-                    [InlineKeyboardButton("РЎРґР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚", callback_data=f"pick_submit:{task.id}")],
+                    [InlineKeyboardButton("Изменить статус", callback_data=f"change_status:{task.id}")],
+                    [InlineKeyboardButton("Сдать результат", callback_data=f"pick_submit:{task.id}")],
                 ]
             ),
         )
         return
 
     await update.message.reply_text(
-        "Р’С‹Р±РµСЂРёС‚Рµ РґРµР№СЃС‚РІРёРµ РєРЅРѕРїРєРѕР№ РІРЅРёР·Сѓ РёР»Рё РЅР°РїРёС€РёС‚Рµ /start.",
+        "Выберите действие кнопкой внизу или напишите /start.",
         reply_markup=main_menu(user_id, settings),
     )
 
@@ -1261,7 +1261,7 @@ async def show_submit_task_picker(update: Update, context: ContextTypes.DEFAULT_
     db: TaskDatabase = context.application.bot_data["db"]
     tasks = db.list_tasks()
     if not tasks:
-        await update.message.reply_text("РђРєС‚РёРІРЅС‹С… Р·Р°РґР°С‡ РїРѕРєР° РЅРµС‚.")
+        await update.message.reply_text("Активных задач пока нет.")
         return
 
     rows = []
@@ -1270,7 +1270,7 @@ async def show_submit_task_picker(update: Update, context: ContextTypes.DEFAULT_
     rows.append([InlineKeyboardButton(BACK_BUTTON, callback_data="back:menu")])
 
     await update.message.reply_text(
-        "Р’С‹Р±РµСЂРёС‚Рµ Р·Р°РґР°С‡Сѓ, РїРѕ РєРѕС‚РѕСЂРѕР№ С…РѕС‚РёС‚Рµ СЃРґР°С‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚:",
+        "Выберите задачу, по которой хотите сдать результат:",
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
@@ -1283,7 +1283,7 @@ async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await submit_task_from_message(update, context)
     context.user_data.clear()
-    await update.message.reply_text(reply_markup=main_menu(user_id, settings), text="РњРµРЅСЋ РІРѕР·РІСЂР°С‰РµРЅРѕ.")
+    await update.message.reply_text(reply_markup=main_menu(user_id, settings), text="Меню возвращено.")
 
 
 async def remind_managers(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1308,7 +1308,7 @@ async def remind_managers(context: ContextTypes.DEFAULT_TYPE) -> None:
             ]
             await context.bot.send_message(
                 chat_id=manager_id,
-                text=f"РќР°РїРѕРјРёРЅР°РЅРёРµ РЅР° 10:00 РњРЎРљ\n{status_label(status)}: {len(tasks)}",
+                text=f"Напоминание на 10:00 МСК\n{status_label(status)}: {len(tasks)}",
                 reply_markup=InlineKeyboardMarkup(rows),
             )
             for task in tasks:
@@ -1317,21 +1317,21 @@ async def remind_managers(context: ContextTypes.DEFAULT_TYPE) -> None:
         if not sent_any:
             await context.bot.send_message(
                 chat_id=manager_id,
-                text="РќР°РїРѕРјРёРЅР°РЅРёРµ РЅР° 10:00 РњРЎРљ: Р·Р°РґР°С‡, РѕР¶РёРґР°СЋС‰РёС… СЂРµС€РµРЅРёСЏ, РЅРµС‚.",
+                text="Напоминание на 10:00 МСК: задач, ожидающих решения, нет.",
             )
 
 
 async def morning_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     db: TaskDatabase = context.application.bot_data["db"]
-    text = format_task_list(db.list_tasks()[:10], "РЈС‚СЂРµРЅРЅРёР№ РґР°Р№РґР¶РµСЃС‚")
+    text = format_task_list(db.list_tasks()[:10], "Утренний дайджест")
     for manager_id in settings.manager_ids:
         await context.bot.send_message(chat_id=manager_id, text=text)
 
 
 def format_task_list(tasks: list[Task], title: str) -> str:
     if not tasks:
-        return f"{title}: РїСѓСЃС‚Рѕ."
+        return f"{title}: пусто."
     return f"{title}:\n\n" + "\n\n".join(task_text(task) for task in tasks)
 
 
@@ -1384,6 +1384,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 

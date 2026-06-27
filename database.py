@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -114,6 +114,7 @@ class TaskDatabase:
             self._add_column_if_missing(connection, "solution_file_id", "TEXT NOT NULL DEFAULT ''")
             self._add_column_if_missing(connection, "solution_file_name", "TEXT NOT NULL DEFAULT ''")
             self._add_column_if_missing(connection, "solution_file_type", "TEXT NOT NULL DEFAULT ''")
+            self._normalize_legacy_statuses(connection)
 
     def _add_column_if_missing(self, connection: sqlite3.Connection, name: str, definition: str) -> None:
         columns = {
@@ -122,6 +123,23 @@ class TaskDatabase:
         }
         if name not in columns:
             connection.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+
+    def _normalize_legacy_statuses(self, connection: sqlite3.Connection) -> None:
+        legacy_statuses = {
+            "Р’ СЂР°Р±РѕС‚Рµ": STATUS_IN_PROGRESS,
+            "Р–РґСѓ СЂРµС€РµРЅРёСЏ": STATUS_WAITING_MANAGER,
+            "РќР° СЃРѕРіР»Р°СЃРѕРІР°РЅРёРё": STATUS_APPROVAL,
+            "Р–РґСѓ РєРѕРјРјРµРЅС‚Р°СЂРёРё": STATUS_NEEDS_INPUT,
+            "Р—Р°РІРёСЃР»Рѕ": STATUS_STUCK,
+            "РџРµСЂРµРЅРѕСЃ": STATUS_POSTPONED,
+            "РћС‚РјРµРЅР°": STATUS_CANCELLED,
+            "Р’С‹РїРѕР»РЅРµРЅРѕ": STATUS_DONE,
+        }
+        for old_status, new_status in legacy_statuses.items():
+            connection.execute(
+                "UPDATE tasks SET status = ? WHERE status = ?",
+                (new_status, old_status),
+            )
 
     def create_task(
         self,
@@ -301,3 +319,4 @@ class TaskDatabase:
             solution_file_name=str(row["solution_file_name"] or ""),
             solution_file_type=str(row["solution_file_type"] or ""),
         )
+
