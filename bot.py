@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, time, timezone
 import logging
 import os
 from pathlib import Path
+import secrets
 import tempfile
 import time as time_module
 
@@ -75,6 +76,31 @@ MENU_WHOAMI = "Мой Telegram ID"
 MENU_CANCEL = "Отмена"
 BACK_BUTTON = "⬅️ Назад"
 
+TASK_CANDIDATE_KEYWORDS = (
+    "сделай",
+    "сделать",
+    "подготов",
+    "нужно",
+    "надо",
+    "проверь",
+    "отправь",
+    "создай",
+    "узнай",
+    "напомни",
+    "забронируй",
+    "оплати",
+    "найди",
+    "напиши",
+    "согласуй",
+    "посмотри",
+    "поставь",
+    "закажи",
+    "перенеси",
+    "оформи",
+    "запиши",
+    "позвони",
+)
+
 STATUS_LABELS = {
     STATUS_DONE: "🟢 Выполнено",
     STATUS_STUCK: "🔴 Зависло",
@@ -113,6 +139,68 @@ def pick_manager_id(settings: Settings) -> int | None:
     if not settings.manager_ids:
         return None
     return next(iter(settings.manager_ids))
+
+
+def should_process_group_message(message: Message, settings: Settings) -> bool:
+    if not settings.group_chat_ids or message.chat_id not in settings.group_chat_ids:
+        return False
+    if message.from_user is None or message.from_user.is_bot:
+        return False
+    if is_assistant(message.from_user.id, settings):
+        return False
+    return is_manager(message.from_user.id, settings)
+
+
+def looks_like_task_candidate(text: str) -> bool:
+    normalized = text.strip().lower()
+    if len(normalized) < 8:
+        return False
+    return any(keyword in normalized for keyword in TASK_CANDIDATE_KEYWORDS)
+
+
+def candidate_keyboard(candidate_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Создать задачу", callback_data=f"candidate_create:{candidate_id}")],
+            [InlineKeyboardButton("Игнорировать", callback_data=f"candidate_ignore:{candidate_id}")],
+            [InlineKeyboardButton("Добавить как комментарий", callback_data=f"candidate_comment:{candidate_id}")],
+        ]
+    )
+
+
+async def send_task_candidate_to_assistant(
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: Settings,
+    text: str,
+    manager_id: int,
+    source: str,
+) -> None:
+    if not settings.send_candidates_to_dm:
+        return
+
+    assistant_id = pick_assistant_id(settings)
+    if assistant_id is None:
+        logging.warning("Cannot send task candidate: ASSISTANT_IDS is empty")
+        return
+
+    candidate_id = secrets.token_urlsafe(8)
+    candidates = context.application.bot_data.setdefault("task_candidates", {})
+    candidates[candidate_id] = {
+        "text": text.strip(),
+        "manager_id": manager_id,
+        "assistant_id": assistant_id,
+        "source": source,
+    }
+
+    await context.bot.send_message(
+        chat_id=assistant_id,
+        text=(
+            f"Возможная задача от руководителя ({source}).\n\n"
+            f"{text.strip()}\n\n"
+            "Создать задачу?"
+        ),
+        reply_markup=candidate_keyboard(candidate_id),
+    )
 
 
 def main_menu(user_id: int, settings: Settings) -> ReplyKeyboardMarkup:
@@ -254,7 +342,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     await update.message.reply_text(
-        f"Ваш Telegram ID: {update.effective_user.id}",
+        f"Ваш Telegram ID: {update.effective_user.id}\n"
+        f"ID этого чата: {update.effective_chat.id}",
         reply_markup=main_menu(update.effective_user.id, settings),
     )
 
@@ -287,14 +376,20 @@ async def group_task_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if message is None or message.text is None:
         return
 
-    if message.from_user is None or not is_manager(message.from_user.id, settings):
+    if not should_process_group_message(message, settings):
         return
 
     text = message.text.strip()
-    if not text:
+    if not text or not looks_like_task_candidate(text):
         return
 
-    await create_task_from_text(update, context, text, source_chat_id=message.chat_id)
+    await send_task_candidate_to_assistant(
+        context=context,
+        settings=settings,
+        text=text,
+        manager_id=message.from_user.id,
+        source="текст из группы",
+    )
 
 
 async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -303,28 +398,26 @@ async def group_voice_task_message(update: Update, context: ContextTypes.DEFAULT
     if message is None or message.voice is None:
         return
 
-    if message.from_user is None or not is_manager(message.from_user.id, settings):
+    if not should_process_group_message(message, settings):
         return
-
-    await message.reply_text("Слушаю голосовое и превращаю его в задачу...")
 
     try:
         transcript = await transcribe_telegram_voice(message)
     except Exception as error:
         logging.exception("Voice transcription failed")
-        await message.reply_text(
-            "Не получилось расшифровать голосовое.\n\n"
-            f"Короткая причина: {safe_error_text(error)}\n\n"
-            "Проверьте YANDEX_API_KEY и баланс Yandex Cloud."
-        )
         return
 
     transcript = transcript.strip()
     if not transcript:
-        await message.reply_text("Голосовое распознано пустым. Попробуйте записать ещё раз.")
         return
 
-    await create_task_from_text(update, context, transcript, source_chat_id=message.chat_id)
+    await send_task_candidate_to_assistant(
+        context=context,
+        settings=settings,
+        text=transcript,
+        manager_id=message.from_user.id,
+        source="расшифровка голосового",
+    )
 
 
 async def transcribe_telegram_voice(message: Message) -> str:
@@ -871,6 +964,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await handle_pick_submit_button(update, context, settings, parts)
         return
 
+    if action_group.startswith("candidate_"):
+        await handle_task_candidate_button(update, context, settings, parts)
+        return
+
     if action_group == "back":
         await handle_back_button(update, context, settings, parts)
         return
@@ -902,6 +999,71 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if action_group == "manager_comment":
         await handle_manager_comment_button(update, context, settings, parts)
         return
+
+
+async def handle_task_candidate_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: Settings,
+    parts: list[str],
+) -> None:
+    query = update.callback_query
+    if not is_assistant(query.from_user.id, settings):
+        await query.edit_message_text("Эти кнопки доступны только ассистенту.")
+        return
+
+    action = parts[0]
+    candidate_id = parts[1] if len(parts) > 1 else ""
+    candidates = context.application.bot_data.setdefault("task_candidates", {})
+    candidate = candidates.get(candidate_id)
+    if candidate is None:
+        await query.edit_message_text("Этот кандидат уже обработан или устарел.")
+        return
+
+    if action == "candidate_ignore":
+        candidates.pop(candidate_id, None)
+        await query.edit_message_text("Кандидат проигнорирован. Задача не создана.")
+        return
+
+    if action == "candidate_comment":
+        await query.edit_message_text(
+            "Добавление кандидата как комментария пока требует выбора задачи.\n\n"
+            "Откройте нужную задачу в сводке и добавьте комментарий через существующие кнопки."
+        )
+        return
+
+    if action != "candidate_create":
+        await query.edit_message_text("Неизвестное действие с кандидатом.")
+        return
+
+    db: TaskDatabase = context.application.bot_data["db"]
+    text = str(candidate["text"])
+    manager_id = int(candidate["manager_id"])
+    assistant_id = int(candidate["assistant_id"])
+    title, deadline, comment = parse_task_input(text)
+    if not title:
+        await query.edit_message_text("Не удалось создать задачу: текст кандидата пустой.")
+        return
+
+    task = db.create_task(
+        title=title,
+        deadline=deadline,
+        comment=comment,
+        assistant_id=assistant_id,
+        manager_id=manager_id,
+        created_by_id=manager_id,
+        created_by_role="manager",
+    )
+    candidates.pop(candidate_id, None)
+
+    await query.edit_message_text(
+        f"Задача создана из кандидата:\n\n{task_text(task)}",
+        reply_markup=assistant_status_keyboard(task.id),
+    )
+    await context.bot.send_message(
+        chat_id=manager_id,
+        text=f"Ассистент создал задачу из сообщения в группе:\n\n{task_text(task)}",
+    )
 
 
 async def handle_pick_submit_button(
