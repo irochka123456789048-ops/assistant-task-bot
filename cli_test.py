@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ from database import (
     ALL_STATUSES,
     STATUS_DONE,
     STATUS_NEEDS_INPUT,
-    STATUS_READY_REVIEW,
+    STATUS_POSTPONED,
     STATUS_STUCK,
     Task,
     TaskDatabase,
@@ -149,9 +149,9 @@ def manager_feedback(db: TaskDatabase) -> None:
 
     decisions = [
         ("Одобрить", STATUS_DONE),
-        ("Нужны правки", STATUS_READY_REVIEW),
+        ("Нужны правки", STATUS_NEEDS_INPUT),
         ("Задать вопрос", STATUS_NEEDS_INPUT),
-        ("Позже", STATUS_STUCK),
+        ("Позже", STATUS_POSTPONED),
     ]
 
     print("\nРешение руководителя:")
@@ -244,3 +244,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
